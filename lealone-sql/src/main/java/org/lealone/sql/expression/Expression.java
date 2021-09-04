@@ -22,8 +22,11 @@ import org.lealone.db.value.DataType;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueArray;
 import org.lealone.sql.expression.evaluator.HotSpotEvaluator;
+import org.lealone.sql.expression.visitor.ExpressionVisitorFactory;
+import org.lealone.sql.expression.visitor.IExpressionVisitor;
 import org.lealone.sql.optimizer.ColumnResolver;
 import org.lealone.sql.optimizer.TableFilter;
+import org.lealone.sql.vector.ValueVector;
 
 /**
  * An expression is a operation, a value, or a function in a query.
@@ -44,6 +47,10 @@ public abstract class Expression implements org.lealone.sql.IExpression {
     }
 
     public abstract Value getValue(ServerSession session);
+
+    public ValueVector getValueVector(ServerSession session) {
+        return null;
+    }
 
     /**
      * Return the data type. The data type may not be known before the
@@ -380,15 +387,13 @@ public abstract class Expression implements org.lealone.sql.IExpression {
     @SuppressWarnings("unchecked")
     @Override
     public void getDependencies(Set<?> dependencies) {
-        ExpressionVisitor visitor = ExpressionVisitor.getDependenciesVisitor((Set<DbObject>) dependencies);
-        isEverything(visitor);
+        accept(ExpressionVisitorFactory.getDependenciesVisitor((Set<DbObject>) dependencies));
     }
 
     @SuppressWarnings("unchecked")
     @Override
     public void getColumns(Set<?> columns) {
-        ExpressionVisitor visitor = ExpressionVisitor.getColumnsVisitor((Set<Column>) columns);
-        isEverything(visitor);
+        accept(ExpressionVisitorFactory.getColumnsVisitor((Set<Column>) columns));
     }
 
     // 默认回退到解释执行的方式
@@ -407,4 +412,6 @@ public abstract class Expression implements org.lealone.sql.IExpression {
         }
         return indent;
     }
+
+    public abstract <R> R accept(IExpressionVisitor<R> visitor);
 }

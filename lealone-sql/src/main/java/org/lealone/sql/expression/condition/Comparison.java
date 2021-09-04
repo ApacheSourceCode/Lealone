@@ -22,9 +22,12 @@ import org.lealone.sql.expression.ExpressionVisitor;
 import org.lealone.sql.expression.Parameter;
 import org.lealone.sql.expression.ValueExpression;
 import org.lealone.sql.expression.evaluator.HotSpotEvaluator;
+import org.lealone.sql.expression.visitor.IExpressionVisitor;
 import org.lealone.sql.optimizer.ColumnResolver;
 import org.lealone.sql.optimizer.IndexCondition;
 import org.lealone.sql.optimizer.TableFilter;
+import org.lealone.sql.vector.BooleanVector;
+import org.lealone.sql.vector.ValueVector;
 
 /**
  * Example comparison expressions are ID=1, NAME=NAME, NAME IS NULL.
@@ -116,6 +119,14 @@ public class Comparison extends Condition {
         this.left = left;
         this.right = right;
         this.compareType = compareType;
+    }
+
+    public Expression getLeft() {
+        return left;
+    }
+
+    public Expression getRight() {
+        return right;
     }
 
     public int getCompareType() {
@@ -250,6 +261,27 @@ public class Comparison extends Condition {
         r = r.convertTo(dataType);
         boolean result = compareNotNull(database, l, r, compareType);
         return ValueBoolean.get(result);
+    }
+
+    @Override
+    public ValueVector getValueVector(ServerSession session) {
+        ValueVector l = left.getValueVector(session);
+        if (right == null) {
+            BooleanVector result;
+            switch (compareType) {
+            case IS_NULL:
+                result = l.isNull();
+                break;
+            case IS_NOT_NULL:
+                result = l.isNotNull();
+                break;
+            default:
+                throw DbException.getInternalError("type=" + compareType);
+            }
+            return result;
+        }
+        ValueVector r = right.getValueVector(session);
+        return l.compare(r, compareType);
     }
 
     /**
@@ -570,5 +602,10 @@ public class Comparison extends Condition {
                 .append(retVarLeft).append(", ").append(retVarRight).append(", ").append(compareType).append(");\r\n");
         buff.append("    ").append(indent).append(retVar).append(" = ValueBoolean.get(result);\r\n");
         buff.append(indent).append("}").append("\r\n");
+    }
+
+    @Override
+    public <R> R accept(IExpressionVisitor<R> visitor) {
+        return visitor.visitComparison(this);
     }
 }

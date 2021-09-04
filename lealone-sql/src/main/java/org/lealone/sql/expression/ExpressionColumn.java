@@ -22,11 +22,13 @@ import org.lealone.db.value.ValueBoolean;
 import org.lealone.sql.Parser;
 import org.lealone.sql.expression.condition.Comparison;
 import org.lealone.sql.expression.evaluator.HotSpotEvaluator;
+import org.lealone.sql.expression.visitor.IExpressionVisitor;
 import org.lealone.sql.optimizer.AliasColumnResolver;
 import org.lealone.sql.optimizer.ColumnResolver;
 import org.lealone.sql.optimizer.IndexCondition;
 import org.lealone.sql.optimizer.TableFilter;
 import org.lealone.sql.query.Select;
+import org.lealone.sql.vector.ValueVector;
 
 /**
  * A expression that represents a column of a table or view.
@@ -68,6 +70,10 @@ public class ExpressionColumn extends Expression {
             database = LealoneDatabase.getInstance().getDatabase(databaseName);
         }
         return database;
+    }
+
+    public ColumnResolver getColumnResolver() {
+        return columnResolver;
     }
 
     @Override
@@ -207,6 +213,15 @@ public class ExpressionColumn extends Expression {
             }
         }
         Value value = columnResolver.getValue(column);
+        if (value == null) {
+            throw DbException.get(ErrorCode.MUST_GROUP_BY_COLUMN_1, getSQL());
+        }
+        return value;
+    }
+
+    @Override
+    public ValueVector getValueVector(ServerSession session) {
+        ValueVector value = columnResolver.getValueVector(column);
         if (value == null) {
             throw DbException.get(ErrorCode.MUST_GROUP_BY_COLUMN_1, getSQL());
         }
@@ -359,5 +374,10 @@ public class ExpressionColumn extends Expression {
         evaluator.addExpressionColumn(this);
         buff.append(indent).append(retVar).append(" = evaluator.getExpressionColumn(")
                 .append(evaluator.getExpressionColumnListSize() - 1).append(").getValue(session);\r\n");
+    }
+
+    @Override
+    public <R> R accept(IExpressionVisitor<R> visitor) {
+        return visitor.visitExpressionColumn(this);
     }
 }
