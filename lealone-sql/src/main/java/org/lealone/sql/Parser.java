@@ -137,10 +137,10 @@ import org.lealone.sql.expression.Parameter;
 import org.lealone.sql.expression.Rownum;
 import org.lealone.sql.expression.SelectOrderBy;
 import org.lealone.sql.expression.SequenceValue;
-import org.lealone.sql.expression.Subquery;
 import org.lealone.sql.expression.ValueExpression;
 import org.lealone.sql.expression.Variable;
 import org.lealone.sql.expression.Wildcard;
+import org.lealone.sql.expression.aggregate.AGroupConcat;
 import org.lealone.sql.expression.aggregate.Aggregate;
 import org.lealone.sql.expression.aggregate.JavaAggregate;
 import org.lealone.sql.expression.condition.CompareLike;
@@ -155,6 +155,7 @@ import org.lealone.sql.expression.function.FunctionCall;
 import org.lealone.sql.expression.function.FunctionTable;
 import org.lealone.sql.expression.function.JavaFunction;
 import org.lealone.sql.expression.function.TableFunction;
+import org.lealone.sql.expression.subquery.SubQuery;
 import org.lealone.sql.optimizer.SingleColumnResolver;
 import org.lealone.sql.optimizer.TableFilter;
 import org.lealone.sql.optimizer.TableFilter.TableFilterVisitor;
@@ -1655,12 +1656,12 @@ public class Parser implements SQLParser {
 
     private void parseSelectSimpleFromPart(Select command) {
         do {
-            TableFilter filter = readTableFilter(false);
+            TableFilter filter = readTableFilter();
             parseJoinTableFilter(filter, command);
         } while (readIf(","));
     }
 
-    private TableFilter readTableFilter(boolean fromOuter) {
+    private TableFilter readTableFilter() {
         Table table;
         String alias = null;
         if (readIf("(")) {
@@ -1679,14 +1680,8 @@ public class Parser implements SQLParser {
                 table = TableView.createTempView(s, session.getUser(), alias, query, currentSelect);
             } else {
                 TableFilter top;
-                if (database.getSettings().nestedJoins) {
-                    top = readTableFilter(false);
-                    top = readJoin(top, currentSelect, false, false);
-                    top = getNested(top);
-                } else {
-                    top = readTableFilter(fromOuter);
-                    top = readJoin(top, currentSelect, false, fromOuter);
-                }
+                top = readTableFilter();
+                top = readJoin(top, currentSelect);
                 read(")");
                 alias = readFromAlias(null);
                 if (alias != null) {
@@ -1751,8 +1746,7 @@ public class Parser implements SQLParser {
         if (readIf("AS")) {
             alias = readAliasIdentifier();
         } else if (currentTokenType == IDENTIFIER) {
-            // left and right are not keywords (because they are functions as
-            // well)
+            // left and right are not keywords (because they are functions as well)
             if (!isToken("LEFT") && !isToken("RIGHT") && !isToken("FULL")) {
                 alias = readAliasIdentifier();
             }
@@ -1761,7 +1755,7 @@ public class Parser implements SQLParser {
     }
 
     private void parseJoinTableFilter(TableFilter top, final Select command) {
-        top = readJoin(top, command, false, top.isJoinOuter());
+        top = readJoin(top, command);
         command.addTableFilter(top, true);
         boolean isOuter = false;
         while (true) {
@@ -1795,91 +1789,62 @@ public class Parser implements SQLParser {
         }
     }
 
-    private TableFilter readJoin(TableFilter top, Select command, boolean nested, boolean fromOuter) {
-        boolean joined = false;
+    private TableFilter readJoin(TableFilter top, Select command) {
         TableFilter last = top;
-        boolean nestedJoins = database.getSettings().nestedJoins;
         while (true) {
             if (readIf("RIGHT")) {
                 readIf("OUTER");
                 read("JOIN");
-                joined = true;
                 // the right hand side is the 'inner' table usually
-                TableFilter newTop = readTableFilter(fromOuter);
-                newTop = readJoin(newTop, command, nested, true);
+                TableFilter newTop = readTableFilter();
+                newTop = readJoin(newTop, command);
                 Expression on = null;
                 if (readIf("ON")) {
                     on = readExpression();
                 }
-                if (nestedJoins) {
-                    top = getNested(top);
-                    newTop.addJoin(top, true, false, on);
-                } else {
-                    newTop.addJoin(top, true, false, on);
-                }
+                addJoin(newTop, top, true, on);
                 top = newTop;
                 last = newTop;
             } else if (readIf("LEFT")) {
                 readIf("OUTER");
                 read("JOIN");
-                joined = true;
-                TableFilter join = readTableFilter(true);
-                if (nestedJoins) {
-                    join = readJoin(join, command, true, true);
-                } else {
-                    top = readJoin(top, command, false, true);
-                }
+                TableFilter join = readTableFilter();
+                top = readJoin(top, command);
                 Expression on = null;
                 if (readIf("ON")) {
                     on = readExpression();
                 }
-                top.addJoin(join, true, false, on);
+                addJoin(top, join, true, on);
                 last = join;
             } else if (readIf("FULL")) {
                 throw getSyntaxError();
             } else if (readIf("INNER")) {
                 read("JOIN");
-                joined = true;
-                TableFilter join = readTableFilter(fromOuter);
-                top = readJoin(top, command, false, false);
+                TableFilter join = readTableFilter();
+                top = readJoin(top, command);
                 Expression on = null;
                 if (readIf("ON")) {
                     on = readExpression();
                 }
-                if (nestedJoins) {
-                    top.addJoin(join, false, false, on);
-                } else {
-                    top.addJoin(join, fromOuter, false, on);
-                }
+                addJoin(top, join, false, on);
                 last = join;
             } else if (readIf("JOIN")) {
-                joined = true;
-                TableFilter join = readTableFilter(fromOuter);
-                top = readJoin(top, command, false, false);
+                TableFilter join = readTableFilter();
+                top = readJoin(top, command);
                 Expression on = null;
                 if (readIf("ON")) {
                     on = readExpression();
                 }
-                if (nestedJoins) {
-                    top.addJoin(join, false, false, on);
-                } else {
-                    top.addJoin(join, fromOuter, false, on);
-                }
+                addJoin(top, join, false, on);
                 last = join;
             } else if (readIf("CROSS")) {
                 read("JOIN");
-                joined = true;
-                TableFilter join = readTableFilter(fromOuter);
-                if (nestedJoins) {
-                    top.addJoin(join, false, false, null);
-                } else {
-                    top.addJoin(join, fromOuter, false, null);
-                }
+                TableFilter join = readTableFilter();
+                addJoin(top, join, false, null);
                 last = join;
             } else if (readIf("NATURAL")) {
                 read("JOIN");
-                joined = true;
-                TableFilter join = readTableFilter(fromOuter);
+                TableFilter join = readTableFilter();
                 Column[] tableCols = last.getTable().getColumns();
                 Column[] joinCols = join.getTable().getColumns();
                 String tableSchema = last.getTable().getSchema().getName();
@@ -1904,27 +1869,32 @@ public class Parser implements SQLParser {
                         }
                     }
                 }
-                if (nestedJoins) {
-                    top.addJoin(join, false, nested, on);
-                } else {
-                    top.addJoin(join, fromOuter, false, on);
-                }
+                addJoin(top, join, false, on);
                 last = join;
             } else {
                 break;
             }
         }
-        if (nested && joined) {
-            top = getNested(top);
-        }
         return top;
     }
 
-    private TableFilter getNested(TableFilter n) {
-        String joinTable = Constants.PREFIX_JOIN + parseIndex;
-        TableFilter top = new TableFilter(session, getDualTable(true), joinTable, rightsChecked, currentSelect);
-        top.addJoin(n, false, true, null);
-        return top;
+    /**
+     * Add one join to another. This method creates nested join between them if required.
+     *
+     * @param top parent join
+     * @param join child join
+     * @param outer if child join is an outer join
+     * @param on the join condition
+     * @see TableFilter#addJoin(TableFilter, boolean, Expression)
+     */
+    private void addJoin(TableFilter top, TableFilter join, boolean outer, Expression on) {
+        if (join.getJoin() != null) {
+            String joinTable = Constants.PREFIX_JOIN + parseIndex; // 如：SYSTEM_JOIN_25
+            TableFilter n = new TableFilter(session, getDualTable(false), joinTable, rightsChecked, currentSelect);
+            n.setNestedJoin(join);
+            join = n;
+        }
+        top.addJoin(join, outer, on);
     }
 
     private void setSQL(StatementBase command, String start, int startIndex) {
@@ -2022,8 +1992,8 @@ public class Parser implements SQLParser {
                             last = readExpression();
                             v.add(last);
                         } while (readIf(","));
-                        if (v.size() == 1 && (last instanceof Subquery)) {
-                            Subquery s = (Subquery) last;
+                        if (v.size() == 1 && (last instanceof SubQuery)) {
+                            SubQuery s = (SubQuery) last;
                             Query q = s.getQuery();
                             r = new ConditionInSelect(database, r, q, false, Comparison.EQUAL);
                         } else {
@@ -2078,7 +2048,7 @@ public class Parser implements SQLParser {
                                 int idx = filters.indexOf(rightFilter);
                                 if (idx >= 0) {
                                     filters.remove(idx);
-                                    leftFilter.addJoin(rightFilter, true, false, r);
+                                    leftFilter.addJoin(rightFilter, true, r);
                                 } else {
                                     rightFilter.mapAndAddFilter(r);
                                 }
@@ -2160,22 +2130,22 @@ public class Parser implements SQLParser {
         Expression r;
         if (aggregateType == Aggregate.COUNT) {
             if (readIf("*")) {
-                r = new Aggregate(Aggregate.COUNT_ALL, null, currentSelect, false);
+                r = Aggregate.create(Aggregate.COUNT_ALL, null, currentSelect, false);
             } else {
                 boolean distinct = readIf("DISTINCT");
                 Expression on = readExpression();
                 if (on instanceof Wildcard && !distinct) {
                     // PostgreSQL compatibility: count(t.*)
-                    r = new Aggregate(Aggregate.COUNT_ALL, null, currentSelect, false);
+                    r = Aggregate.create(Aggregate.COUNT_ALL, null, currentSelect, false);
                 } else {
-                    r = new Aggregate(Aggregate.COUNT, on, currentSelect, distinct);
+                    r = Aggregate.create(Aggregate.COUNT, on, currentSelect, distinct);
                 }
             }
         } else if (aggregateType == Aggregate.GROUP_CONCAT) {
-            Aggregate agg = null;
+            AGroupConcat agg = null;
             if (equalsToken("GROUP_CONCAT", aggregateName)) {
                 boolean distinct = readIf("DISTINCT");
-                agg = new Aggregate(Aggregate.GROUP_CONCAT, readExpression(), currentSelect, distinct);
+                agg = new AGroupConcat(Aggregate.GROUP_CONCAT, readExpression(), currentSelect, distinct);
                 if (readIf("ORDER")) {
                     read("BY");
                     agg.setGroupConcatOrder(parseSimpleOrderList());
@@ -2186,14 +2156,14 @@ public class Parser implements SQLParser {
                 }
             } else if (equalsToken("STRING_AGG", aggregateName)) {
                 // PostgreSQL compatibility: string_agg(expression, delimiter)
-                agg = new Aggregate(Aggregate.GROUP_CONCAT, readExpression(), currentSelect, false);
+                agg = new AGroupConcat(Aggregate.GROUP_CONCAT, readExpression(), currentSelect, false);
                 read(",");
                 agg.setGroupConcatSeparator(readExpression());
             }
             r = agg;
         } else {
             boolean distinct = readIf("DISTINCT");
-            r = new Aggregate(aggregateType, readExpression(), currentSelect, distinct);
+            r = Aggregate.create(aggregateType, readExpression(), currentSelect, distinct);
         }
         read(")");
         return r;
@@ -2574,7 +2544,7 @@ public class Parser implements SQLParser {
         case KEYWORD:
             if (isToken("SELECT") || isToken("FROM")) {
                 Query query = parseSelect();
-                r = new Subquery(query);
+                r = new SubQuery(query);
             } else {
                 throw getSyntaxError();
             }

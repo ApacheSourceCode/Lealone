@@ -424,7 +424,7 @@ public abstract class Model<T> {
             while (tableFilterStack.size() > 1) {
                 ExpressionBuilder<T> on = getStack().pop();
                 TableFilter joined = getTableFilterStack().pop();
-                first.addJoin(joined, false, false, on.getExpression());
+                first.addJoin(joined, false, on.getExpression());
             }
         }
     }
@@ -638,7 +638,7 @@ public abstract class Model<T> {
         Select select = createSelect(tid);
         select.setGroupQuery();
         getSelectExpressions().clear();
-        Aggregate a = new Aggregate(Aggregate.COUNT_ALL, null, select, false);
+        Aggregate a = Aggregate.create(Aggregate.COUNT_ALL, null, select, false);
         getSelectExpressions().add(a);
         select.setExpressions(getSelectExpressions());
         select.init();
@@ -674,6 +674,10 @@ public abstract class Model<T> {
     }
 
     public long insert(Long tid) {
+        // 必须设置字段值
+        if (nvPairs == null) {
+            throw new UnsupportedOperationException("No values insert");
+        }
         // 不允许通过 X.dao来insert记录
         if (isDao()) {
             String name = this.getClass().getSimpleName();
@@ -718,6 +722,10 @@ public abstract class Model<T> {
     }
 
     public int update(Long tid) {
+        // 没有变化，直接返回0
+        if (nvPairs == null) {
+            return 0;
+        }
         ServerSession session = getSession(tid);
         Table dbTable = modelTable.getTable();
         Update update = new Update(session);

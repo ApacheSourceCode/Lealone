@@ -21,7 +21,7 @@ public class IntVector extends ValueVector {
     @Override
     public BooleanVector compare(ValueVector vv, int compareType) {
         switch (compareType) {
-        case Comparison.EQUAL:
+        case Comparison.EQUAL: {
             if (vv instanceof SingleValueVector) {
                 int[] values1 = this.values;
                 int v = ((SingleValueVector) vv).getValue().getInt();
@@ -38,12 +38,23 @@ public class IntVector extends ValueVector {
                 values[i] = values1[i] == values2[i];
             }
             return new BooleanVector(values);
+        }
         case Comparison.EQUAL_NULL_SAFE:
             return null;
         case Comparison.BIGGER_EQUAL:
             return null;
-        case Comparison.BIGGER:
+        case Comparison.BIGGER: {
+            if (vv instanceof SingleValueVector) {
+                int[] values1 = this.values;
+                int v = ((SingleValueVector) vv).getValue().getInt();
+                boolean[] values = new boolean[values1.length];
+                for (int i = 0; i < values1.length; i++) {
+                    values[i] = values1[i] > v;
+                }
+                return new BooleanVector(values);
+            }
             return null;
+        }
         case Comparison.SMALLER_EQUAL:
             return null;
         case Comparison.SMALLER:
@@ -71,10 +82,20 @@ public class IntVector extends ValueVector {
         int[] values1 = this.values;
         int[] values2 = ((IntVector) vv).values;
         int[] values = new int[values1.length];
-        for (int i = 0; i < values1.length; i++) {
+        int len = Math.min(values1.length, values2.length);
+        int i = 0;
+        for (; i < len; i++) {
             values[i] = values1[i] + values2[i];
         }
+        for (; i < values1.length; i++) {
+            values[i] = values1[i];
+        }
         return new IntVector(values);
+    }
+
+    @Override
+    public ValueVector add(ValueVector bvv0, ValueVector vv, ValueVector bvv) {
+        return null;
     }
 
     @Override
@@ -105,5 +126,86 @@ public class IntVector extends ValueVector {
     @Override
     public Value getValue(int index) {
         return ValueInt.get(values[index]);
+    }
+
+    @Override
+    public Value[] getValues(ValueVector bvv) {
+        int size;
+        if (bvv == null)
+            size = values.length;
+        else
+            size = bvv.trueCount();
+        Value[] a = new Value[size];
+        int j = 0;
+        for (int i = 0, len = values.length; i < len; i++) {
+            if (bvv == null || bvv.isTrue(i))
+                a[j++] = getValue(i);
+        }
+        return a;
+    }
+
+    @Override
+    public Value sum() {
+        int sum = 0;
+        for (int i = 0, len = values.length; i < len; i++) {
+            sum += values[i];
+        }
+        return ValueInt.get(sum);
+    }
+
+    @Override
+    public Value sum(ValueVector bvv) {
+        if (bvv == null)
+            return sum();
+        int sum = 0;
+        for (int i = 0, len = values.length; i < len; i++) {
+            if (bvv.isTrue(i))
+                sum += values[i];
+        }
+        return ValueInt.get(sum);
+    }
+
+    @Override
+    public Value min() {
+        int min = Integer.MAX_VALUE;
+        for (int i = 0, len = values.length; i < len; i++) {
+            if (min > values[i])
+                min = values[i];
+        }
+        return ValueInt.get(min);
+    }
+
+    @Override
+    public Value min(ValueVector bvv) {
+        if (bvv == null)
+            return min();
+        int min = Integer.MAX_VALUE;
+        for (int i = 0, len = values.length; i < len; i++) {
+            if (bvv.isTrue(i) && min > values[i])
+                min = values[i];
+        }
+        return ValueInt.get(min);
+    }
+
+    @Override
+    public Value max() {
+        int max = Integer.MIN_VALUE;
+        for (int i = 0, len = values.length; i < len; i++) {
+            if (max < values[i])
+                max = values[i];
+        }
+        return ValueInt.get(max);
+    }
+
+    @Override
+    public Value max(ValueVector bvv) {
+        if (bvv == null)
+            return min(bvv);
+        int max = Integer.MIN_VALUE;
+        for (int i = 0, len = values.length; i < len; i++) {
+            if (bvv.isTrue(i) && max < values[i])
+                max = values[i];
+        }
+        return ValueInt.get(max);
     }
 }

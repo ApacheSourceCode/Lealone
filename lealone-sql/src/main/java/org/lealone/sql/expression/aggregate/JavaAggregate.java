@@ -23,11 +23,13 @@ import org.lealone.sql.expression.Expression;
 import org.lealone.sql.expression.ExpressionVisitor;
 import org.lealone.sql.expression.visitor.IExpressionVisitor;
 import org.lealone.sql.optimizer.ColumnResolver;
-import org.lealone.sql.optimizer.TableFilter;
 import org.lealone.sql.query.Select;
 
 /**
  * This class wraps a user-defined aggregate.
+ * 
+ * @author H2 Group
+ * @author zhh
  */
 public class JavaAggregate extends Expression {
 
@@ -142,13 +144,6 @@ public class JavaAggregate extends Expression {
             throw DbException.convert(e);
         }
         return this;
-    }
-
-    @Override
-    public void setEvaluatable(TableFilter tableFilter, boolean b) {
-        for (Expression e : args) {
-            e.setEvaluatable(tableFilter, b);
-        }
     }
 
     private Aggregate getInstance() throws SQLException {

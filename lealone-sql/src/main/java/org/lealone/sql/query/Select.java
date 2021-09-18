@@ -84,7 +84,6 @@ public class Select extends Query {
     boolean isGroupSortedQuery;
     boolean isQuickAggregateQuery;
     boolean isDistinctQuery;
-    boolean isDistinctQueryForMultiFields;
     boolean sortUsingIndex;
     private double cost;
 
@@ -357,7 +356,7 @@ public class Select extends Query {
 
         // 对min、max、count三个聚合函数的特殊优化
         if (condition == null && isGroupQuery && groupIndex == null && havingIndex < 0 && filters.size() == 1
-                && filters.get(0).getPageKeys() != null) {
+                && filters.get(0).getPageKeys() == null) {
             Table t = filters.get(0).getTable();
             ExpressionVisitor optimizable = ExpressionVisitor.getOptimizableVisitor(t);
             isQuickAggregateQuery = isEverything(optimizable);
@@ -477,7 +476,7 @@ public class Select extends Query {
                                 }
                                 if (found) {
                                     topTableFilter.setIndex(index);
-                                    isDistinctQueryForMultiFields = true;
+                                    isDistinctQuery = true;
                                     break;
                                 }
                             }
@@ -508,9 +507,6 @@ public class Select extends Query {
     private void setEvaluatableRecursive(TableFilter f) {
         for (; f != null; f = f.getJoin()) {
             f.setEvaluatable(f, true);
-            if (condition != null) {
-                condition.setEvaluatable(f, true);
-            }
             TableFilter n = f.getNestedJoin();
             if (n != null) {
                 setEvaluatableRecursive(n);
@@ -518,24 +514,10 @@ public class Select extends Query {
             Expression on = f.getJoinCondition();
             if (on != null) {
                 if (!on.isEverything(ExpressionVisitor.EVALUATABLE_VISITOR)) {
-                    if (session.getDatabase().getSettings().nestedJoins) {
-                        // need to check that all added are bound to a table
-                        on = on.optimize(session);
-                        if (!f.isJoinOuter() && !f.isJoinOuterIndirect()) {
-                            f.removeJoinCondition();
-                            addCondition(on);
-                        }
-                    } else {
-                        if (f.isJoinOuter()) {
-                            // this will check if all columns exist - it may or
-                            // may not throw an exception
-                            on = on.optimize(session);
-                            // it is not supported even if the columns exist
-                            throw DbException.get(ErrorCode.UNSUPPORTED_OUTER_JOIN_CONDITION_1, on.getSQL());
-                        }
+                    // need to check that all added are bound to a table
+                    on = on.optimize(session);
+                    if (!f.isJoinOuter() && !f.isJoinOuterIndirect()) {
                         f.removeJoinCondition();
-                        // need to check that all added are bound to a table
-                        on = on.optimize(session);
                         addCondition(on);
                     }
                 }
@@ -546,11 +528,6 @@ public class Select extends Query {
                     f.removeFilterCondition();
                     addCondition(on);
                 }
-            }
-            // this is only important for subqueries, so they know
-            // the result columns are evaluatable
-            for (Expression e : expressions) {
-                e.setEvaluatable(f, true);
             }
         }
     }
@@ -896,16 +873,6 @@ public class Select extends Query {
         }
         if (condition != null) {
             condition.mapColumns(resolver, level);
-        }
-    }
-
-    @Override
-    public void setEvaluatable(TableFilter tableFilter, boolean b) {
-        for (Expression e : expressions) {
-            e.setEvaluatable(tableFilter, b);
-        }
-        if (condition != null) {
-            condition.setEvaluatable(tableFilter, b);
         }
     }
 

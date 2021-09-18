@@ -12,9 +12,7 @@ import org.lealone.sql.expression.ExpressionList;
 import org.lealone.sql.expression.Operation;
 import org.lealone.sql.expression.Parameter;
 import org.lealone.sql.expression.Rownum;
-import org.lealone.sql.expression.SelectOrderBy;
 import org.lealone.sql.expression.SequenceValue;
-import org.lealone.sql.expression.Subquery;
 import org.lealone.sql.expression.ValueExpression;
 import org.lealone.sql.expression.Variable;
 import org.lealone.sql.expression.Wildcard;
@@ -31,6 +29,7 @@ import org.lealone.sql.expression.condition.ConditionNot;
 import org.lealone.sql.expression.function.Function;
 import org.lealone.sql.expression.function.JavaFunction;
 import org.lealone.sql.expression.function.TableFunction;
+import org.lealone.sql.expression.subquery.SubQuery;
 import org.lealone.sql.query.Query;
 
 public class ExpressionVisitorBase<R> implements IExpressionVisitor<R> {
@@ -77,7 +76,7 @@ public class ExpressionVisitorBase<R> implements IExpressionVisitor<R> {
     }
 
     @Override
-    public R visitSubquery(Subquery e) {
+    public R visitSubQuery(SubQuery e) {
         visitQuery(e.getQuery());
         return null;
     }
@@ -164,13 +163,14 @@ public class ExpressionVisitorBase<R> implements IExpressionVisitor<R> {
     public R visitAggregate(Aggregate e) {
         if (e.getOn() != null)
             e.getOn().accept(this);
-        if (e.getGroupConcatSeparator() != null)
-            e.getGroupConcatSeparator().accept(this);
-        if (e.getGroupConcatOrderList() != null) {
-            for (SelectOrderBy o : e.getGroupConcatOrderList()) {
-                o.expression.accept(this);
-            }
-        }
+        // TODO
+        // if (e.getGroupConcatSeparator() != null)
+        // e.getGroupConcatSeparator().accept(this);
+        // if (e.getGroupConcatOrderList() != null) {
+        // for (SelectOrderBy o : e.getGroupConcatOrderList()) {
+        // o.expression.accept(this);
+        // }
+        // }
         return null;
     }
 

@@ -38,7 +38,7 @@ public class YieldableSelect extends YieldableQueryBase {
 
     @Override
     public boolean yieldIfNeeded(int rowNumber) {
-        if (!queryOperatorChanged && rowNumber > 1000) { // TODO 允许配置
+        if (!queryOperatorChanged && rowNumber > 100000) { // TODO 允许配置
             queryOperatorChanged = true;
             super.yieldIfNeeded(rowNumber);
             // createOlapOperatorAync();
@@ -132,18 +132,20 @@ public class YieldableSelect extends YieldableQueryBase {
             to = result != null ? result : target;
             if (limitRows != 0) {
                 if (select.isQuickAggregateQuery) {
-                    queryOperator = new QQuick(select);
+                    queryOperator = new QAggregateQuick(select);
                 } else if (select.isGroupQuery) {
                     if (select.isGroupSortedQuery) {
                         queryOperator = new QGroupSorted(select);
                     } else {
-                        queryOperator = new QGroup(select);
+                        if (select.groupIndex == null) { // 忽视select.havingIndex
+                            queryOperator = new QAggregate(select);
+                        } else {
+                            queryOperator = new QGroup(select);
+                        }
                         to = result;
                     }
                 } else if (select.isDistinctQuery) {
                     queryOperator = new QDistinct(select);
-                } else if (select.isDistinctQueryForMultiFields) {
-                    queryOperator = new QDistinctForMultiFields(select);
                 } else {
                     queryOperator = new QFlat(select);
                 }
@@ -188,7 +190,7 @@ public class YieldableSelect extends YieldableQueryBase {
             result = createLocalResult(result);
             result.setSortOrder(select.sort);
         }
-        if (select.distinct && (!select.isDistinctQuery && !select.isDistinctQueryForMultiFields)) {
+        if (select.distinct && !select.isDistinctQuery) {
             result = createLocalResult(result);
             result.setDistinct();
         }

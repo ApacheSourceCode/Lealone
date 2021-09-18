@@ -5,57 +5,41 @@
  */
 package org.lealone.sql.expression.aggregate;
 
-import org.lealone.db.Database;
+import org.lealone.db.session.ServerSession;
 import org.lealone.db.value.Value;
+import org.lealone.sql.vector.ValueVector;
 
 /**
  * Abstract class for the computation of an aggregate.
+ * 
+ * @author H2 Group
+ * @author zhh
  */
 abstract class AggregateData {
 
     /**
-     * Create an AggregateData object of the correct sub-type.
+     * Add a value to this aggregate.
      *
-     * @param aggregateType the type of the aggregate operation
-     * @return the aggregate data object of the specified type
+     * @param session the session
+     * @param v the value
      */
-    static AggregateData create(int aggregateType) {
-        if (aggregateType == Aggregate.SELECTIVITY) {
-            return new AggregateDataSelectivity();
-        } else if (aggregateType == Aggregate.GROUP_CONCAT) {
-            return new AggregateDataGroupConcat();
-        } else if (aggregateType == Aggregate.COUNT_ALL) {
-            return new AggregateDataCountAll();
-        } else if (aggregateType == Aggregate.COUNT) {
-            return new AggregateDataCount();
-        } else if (aggregateType == Aggregate.HISTOGRAM) {
-            return new AggregateDataHistogram();
-        } else {
-            return new AggregateDataDefault(aggregateType);
+    abstract void add(ServerSession session, Value v);
+
+    void add(ServerSession session, ValueVector bvv, ValueVector vv) {
+        for (Value v : vv.getValues(bvv)) {
+            add(session, v);
         }
     }
 
     /**
-     * Add a value to this aggregate.
-     *
-     * @param database the database
-     * @param dataType the datatype of the computed result
-     * @param distinct if the calculation should be distinct
-     * @param v the value
-     */
-    abstract void add(Database database, int dataType, boolean distinct, Value v);
-
-    /**
      * Get the aggregate result.
      *
-     * @param database the database
-     * @param dataType the datatype of the computed result
-     * @param distinct if distinct is used
+     * @param session the session
      * @return the value
      */
-    abstract Value getValue(Database database, int dataType, boolean distinct);
+    abstract Value getValue(ServerSession session);
 
-    abstract void merge(Database database, int dataType, boolean distinct, Value v);
+    abstract void merge(ServerSession session, Value v);
 
-    abstract Value getMergedValue(Database database, int dataType, boolean distinct);
+    abstract Value getMergedValue(ServerSession session);
 }

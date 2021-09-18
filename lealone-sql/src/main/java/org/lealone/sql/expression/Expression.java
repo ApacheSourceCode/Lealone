@@ -30,6 +30,9 @@ import org.lealone.sql.vector.ValueVector;
 
 /**
  * An expression is a operation, a value, or a function in a query.
+ * 
+ * @author H2 Group
+ * @author zhh
  */
 public abstract class Expression implements org.lealone.sql.IExpression {
 
@@ -83,15 +86,6 @@ public abstract class Expression implements org.lealone.sql.IExpression {
     }
 
     /**
-     * Tell the expression columns whether the table filter can return values now.
-     * This is used when optimizing the query.
-     *
-     * @param tableFilter the table filter
-     * @param value true if the table filter can return value
-     */
-    public abstract void setEvaluatable(TableFilter tableFilter, boolean value);
-
-    /**
      * Get the scale of this expression.
      *
      * @return the scale
@@ -141,6 +135,9 @@ public abstract class Expression implements org.lealone.sql.IExpression {
      * @param session the session
      */
     public abstract void updateAggregate(ServerSession session);
+
+    public void updateAggregate(ServerSession session, ValueVector bvv) {
+    }
 
     /**
      * Check if this expression and all sub-expressions can fulfill a criteria.
