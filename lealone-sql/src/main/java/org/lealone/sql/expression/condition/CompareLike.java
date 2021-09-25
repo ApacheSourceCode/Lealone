@@ -19,12 +19,12 @@ import org.lealone.db.value.ValueNull;
 import org.lealone.db.value.ValueString;
 import org.lealone.sql.expression.Expression;
 import org.lealone.sql.expression.ExpressionColumn;
-import org.lealone.sql.expression.ExpressionVisitor;
 import org.lealone.sql.expression.ValueExpression;
-import org.lealone.sql.expression.visitor.IExpressionVisitor;
-import org.lealone.sql.optimizer.ColumnResolver;
+import org.lealone.sql.expression.visitor.ExpressionVisitorFactory;
+import org.lealone.sql.expression.visitor.ExpressionVisitor;
 import org.lealone.sql.optimizer.IndexCondition;
 import org.lealone.sql.optimizer.TableFilter;
+import org.lealone.sql.vector.ValueVector;
 
 /**
  * Pattern matching comparison expression: WHERE NAME LIKE ?
@@ -182,10 +182,10 @@ public class CompareLike extends Condition {
         // (at prepare time)
         // otherwise we would need to prepare at execute time,
         // which may be slower (possibly not in this case)
-        if (!right.isEverything(ExpressionVisitor.INDEPENDENT_VISITOR)) {
+        if (!right.isEvaluatable()) {
             return;
         }
-        if (escape != null && !escape.isEverything(ExpressionVisitor.INDEPENDENT_VISITOR)) {
+        if (escape != null && !escape.accept(ExpressionVisitorFactory.getIndependentVisitor())) {
             return;
         }
         String p = right.getValue(session).getString();
@@ -268,6 +268,12 @@ public class CompareLike extends Condition {
             result = compareAt(value, 0, 0, value.length(), patternChars, patternTypes);
         }
         return ValueBoolean.get(result);
+    }
+
+    @Override
+    public ValueVector getValueVector(ServerSession session, ValueVector bvv) {
+        ValueVector l = left.getValueVector(session);
+        return l;
     }
 
     private boolean compare(char[] pattern, String s, int pi, int si) {
@@ -397,36 +403,12 @@ public class CompareLike extends Condition {
     }
 
     @Override
-    public void mapColumns(ColumnResolver resolver, int level) {
-        left.mapColumns(resolver, level);
-        right.mapColumns(resolver, level);
-        if (escape != null) {
-            escape.mapColumns(resolver, level);
-        }
-    }
-
-    @Override
-    public void updateAggregate(ServerSession session) {
-        left.updateAggregate(session);
-        right.updateAggregate(session);
-        if (escape != null) {
-            escape.updateAggregate(session);
-        }
-    }
-
-    @Override
-    public boolean isEverything(ExpressionVisitor visitor) {
-        return left.isEverything(visitor) && right.isEverything(visitor)
-                && (escape == null || escape.isEverything(visitor));
-    }
-
-    @Override
     public int getCost() {
         return left.getCost() + right.getCost() + 3;
     }
 
     @Override
-    public <R> R accept(IExpressionVisitor<R> visitor) {
+    public <R> R accept(ExpressionVisitor<R> visitor) {
         return visitor.visitCompareLike(this);
     }
 }

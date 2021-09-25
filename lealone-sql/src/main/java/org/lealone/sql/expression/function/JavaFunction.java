@@ -16,20 +16,19 @@ import org.lealone.db.value.ValueNull;
 import org.lealone.db.value.ValueResultSet;
 import org.lealone.sql.Parser;
 import org.lealone.sql.expression.Expression;
-import org.lealone.sql.expression.ExpressionVisitor;
 import org.lealone.sql.expression.ValueExpression;
-import org.lealone.sql.expression.visitor.IExpressionVisitor;
-import org.lealone.sql.optimizer.ColumnResolver;
+import org.lealone.sql.expression.visitor.ExpressionVisitor;
 
 /**
  * This class wraps a user-defined function.
+ * 
+ * @author H2 Group
+ * @author zhh
  */
-public class JavaFunction extends Expression implements FunctionCall {
+public class JavaFunction extends Function {
 
     private final FunctionAlias functionAlias;
-
     private final FunctionAlias.JavaMethod javaMethod;
-    private final Expression[] args;
 
     public JavaFunction(FunctionAlias functionAlias, Expression[] args) {
         this.functionAlias = functionAlias;
@@ -52,20 +51,8 @@ public class JavaFunction extends Expression implements FunctionCall {
     }
 
     @Override
-    public void mapColumns(ColumnResolver resolver, int level) {
-        for (Expression e : args) {
-            e.mapColumns(resolver, level);
-        }
-    }
-
-    @Override
     public Expression optimize(ServerSession session) {
-        boolean allConst = isDeterministic();
-        for (int i = 0, len = args.length; i < len; i++) {
-            Expression e = args[i].optimize(session);
-            args[i] = e;
-            allConst &= e.isConstant();
-        }
+        boolean allConst = optimizeArgs(session);
         if (allConst) {
             return ValueExpression.get(getValue(session));
         }
@@ -90,26 +77,12 @@ public class JavaFunction extends Expression implements FunctionCall {
     @Override
     public String getSQL(boolean isDistributed) {
         StatementBuilder buff = new StatementBuilder();
-        // TODO always append the schema once FUNCTIONS_IN_SCHEMA is enabled
-        if (functionAlias.getDatabase().getSettings().functionsInSchema
-                || !functionAlias.getSchema().getName().equals(Constants.SCHEMA_MAIN)) {
+        if (!functionAlias.getSchema().getName().equals(Constants.SCHEMA_MAIN)) {
             buff.append(Parser.quoteIdentifier(functionAlias.getSchema().getName())).append('.');
         }
         buff.append(Parser.quoteIdentifier(functionAlias.getName())).append('(');
-        for (Expression e : args) {
-            buff.appendExceptFirst(", ");
-            buff.append(e.getSQL(isDistributed));
-        }
+        appendArgs(buff, isDistributed);
         return buff.append(')').toString();
-    }
-
-    @Override
-    public void updateAggregate(ServerSession session) {
-        for (Expression e : args) {
-            if (e != null) {
-                e.updateAggregate(session);
-            }
-        }
     }
 
     @Override
@@ -118,36 +91,9 @@ public class JavaFunction extends Expression implements FunctionCall {
     }
 
     @Override
-    public ValueResultSet getValueForColumnList(ServerSession session, Expression[] argList) {
-        Value v = javaMethod.getValue(session, argList, true);
+    public ValueResultSet getValueForColumnList(ServerSession session, Expression[] args) {
+        Value v = javaMethod.getValue(session, args, true);
         return v == ValueNull.INSTANCE ? null : (ValueResultSet) v;
-    }
-
-    @Override
-    public Expression[] getArgs() {
-        return args;
-    }
-
-    @Override
-    public boolean isEverything(ExpressionVisitor visitor) {
-        switch (visitor.getType()) {
-        case ExpressionVisitor.DETERMINISTIC:
-            if (!isDeterministic()) {
-                return false;
-            }
-            // only if all parameters are deterministic as well
-            break;
-        case ExpressionVisitor.GET_DEPENDENCIES:
-            visitor.addDependency(functionAlias);
-            break;
-        default:
-        }
-        for (Expression e : args) {
-            if (e != null && !e.isEverything(visitor)) {
-                return false;
-            }
-        }
-        return true;
     }
 
     @Override
@@ -157,11 +103,6 @@ public class JavaFunction extends Expression implements FunctionCall {
             cost += e.getCost();
         }
         return cost;
-    }
-
-    @Override
-    public boolean isDeterministic() {
-        return functionAlias.isDeterministic();
     }
 
     @Override
@@ -177,12 +118,22 @@ public class JavaFunction extends Expression implements FunctionCall {
     }
 
     @Override
-    public boolean isBufferResultSetToLocalTemp() {
+    public int getFunctionType() {
+        return -1;
+    }
+
+    @Override
+    public boolean isDeterministic() {
+        return functionAlias.isDeterministic();
+    }
+
+    @Override
+    boolean isBufferResultSetToLocalTemp() {
         return functionAlias.isBufferResultSetToLocalTemp();
     }
 
     @Override
-    public <R> R accept(IExpressionVisitor<R> visitor) {
+    public <R> R accept(ExpressionVisitor<R> visitor) {
         return visitor.visitJavaFunction(this);
     }
 }

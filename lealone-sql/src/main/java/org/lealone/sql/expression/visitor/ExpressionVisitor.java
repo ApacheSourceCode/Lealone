@@ -6,6 +6,7 @@
 package org.lealone.sql.expression.visitor;
 
 import org.lealone.sql.expression.Alias;
+import org.lealone.sql.expression.Expression;
 import org.lealone.sql.expression.ExpressionColumn;
 import org.lealone.sql.expression.ExpressionList;
 import org.lealone.sql.expression.Operation;
@@ -15,6 +16,7 @@ import org.lealone.sql.expression.SequenceValue;
 import org.lealone.sql.expression.ValueExpression;
 import org.lealone.sql.expression.Variable;
 import org.lealone.sql.expression.Wildcard;
+import org.lealone.sql.expression.aggregate.AGroupConcat;
 import org.lealone.sql.expression.aggregate.Aggregate;
 import org.lealone.sql.expression.aggregate.JavaAggregate;
 import org.lealone.sql.expression.condition.CompareLike;
@@ -29,8 +31,20 @@ import org.lealone.sql.expression.function.Function;
 import org.lealone.sql.expression.function.JavaFunction;
 import org.lealone.sql.expression.function.TableFunction;
 import org.lealone.sql.expression.subquery.SubQuery;
+import org.lealone.sql.query.Select;
+import org.lealone.sql.query.SelectUnion;
 
-public interface IExpressionVisitor<R> {
+public interface ExpressionVisitor<R> {
+
+    public default ExpressionVisitor<R> incrementQueryLevel(int offset) {
+        return this;
+    }
+
+    public default int getQueryLevel() {
+        return 0;
+    }
+
+    R visitExpression(Expression e);
 
     R visitAlias(Alias e);
 
@@ -72,6 +86,8 @@ public interface IExpressionVisitor<R> {
 
     R visitAggregate(Aggregate e);
 
+    R visitAGroupConcat(AGroupConcat e);
+
     R visitJavaAggregate(JavaAggregate e);
 
     R visitFunction(Function e);
@@ -79,4 +95,8 @@ public interface IExpressionVisitor<R> {
     R visitJavaFunction(JavaFunction e);
 
     R visitTableFunction(TableFunction e);
+
+    R visitSelect(Select s);
+
+    R visitSelectUnion(SelectUnion su);
 }

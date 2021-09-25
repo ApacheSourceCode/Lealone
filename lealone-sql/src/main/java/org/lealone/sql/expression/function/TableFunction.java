@@ -24,20 +24,32 @@ import org.lealone.db.value.ValueNull;
 import org.lealone.db.value.ValueResultSet;
 import org.lealone.sql.expression.Expression;
 import org.lealone.sql.expression.ExpressionColumn;
-import org.lealone.sql.expression.visitor.IExpressionVisitor;
+import org.lealone.sql.expression.visitor.ExpressionVisitor;
 
 /**
  * Implementation of the functions TABLE(..) and TABLE_DISTINCT(..).
+ * 
+ * @author H2 Group
+ * @author zhh
  */
-public class TableFunction extends Function {
+public class TableFunction extends BuiltInFunction {
+
+    public static void init() {
+    }
+
+    public static final int TABLE = 300, TABLE_DISTINCT = 301;
+
+    static {
+        addFunctionWithNull("TABLE", TABLE, VAR_ARGS, Value.RESULT_SET);
+        addFunctionWithNull("TABLE_DISTINCT", TABLE_DISTINCT, VAR_ARGS, Value.RESULT_SET);
+    }
+
     private final boolean distinct;
-    private final long rowCount;
     private Column[] columnList;
 
-    TableFunction(Database database, FunctionInfo info, long rowCount) {
+    TableFunction(Database database, FunctionInfo info) {
         super(database, info);
-        distinct = info.type == Function.TABLE_DISTINCT;
-        this.rowCount = rowCount;
+        distinct = info.type == TABLE_DISTINCT;
     }
 
     @Override
@@ -70,7 +82,7 @@ public class TableFunction extends Function {
     }
 
     @Override
-    public ValueResultSet getValueForColumnList(ServerSession session, Expression[] nullArgs) {
+    public ValueResultSet getValueForColumnList(ServerSession session, Expression[] args) {
         return getTable(session, args, true, false);
     }
 
@@ -152,17 +164,13 @@ public class TableFunction extends Function {
         return simple;
     }
 
-    public long getRowCount() {
-        return rowCount;
-    }
-
     @Override
     public Expression[] getExpressionColumns(ServerSession session) {
         return getExpressionColumns(session, getTable(session, getArgs(), true, false).getResultSet());
     }
 
     @Override
-    public <R> R accept(IExpressionVisitor<R> visitor) {
+    public <R> R accept(ExpressionVisitor<R> visitor) {
         return visitor.visitTableFunction(this);
     }
 }

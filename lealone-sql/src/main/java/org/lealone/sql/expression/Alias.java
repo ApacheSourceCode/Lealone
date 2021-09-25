@@ -8,8 +8,8 @@ package org.lealone.sql.expression;
 import org.lealone.db.session.ServerSession;
 import org.lealone.db.value.Value;
 import org.lealone.sql.Parser;
-import org.lealone.sql.expression.visitor.IExpressionVisitor;
-import org.lealone.sql.optimizer.ColumnResolver;
+import org.lealone.sql.expression.visitor.ExpressionVisitor;
+import org.lealone.sql.vector.ValueVector;
 
 /**
  * A column alias as in SELECT 'Hello' AS NAME ...
@@ -37,13 +37,13 @@ public class Alias extends Expression {
     }
 
     @Override
-    public int getType() {
-        return expr.getType();
+    public ValueVector getValueVector(ServerSession session, ValueVector bvv) {
+        return expr.getValueVector(session, bvv);
     }
 
     @Override
-    public void mapColumns(ColumnResolver resolver, int level) {
-        expr.mapColumns(resolver, level);
+    public int getType() {
+        return expr.getType();
     }
 
     @Override
@@ -78,11 +78,6 @@ public class Alias extends Expression {
     }
 
     @Override
-    public void updateAggregate(ServerSession session) {
-        expr.updateAggregate(session);
-    }
-
-    @Override
     public String getAlias() {
         return alias;
     }
@@ -90,11 +85,6 @@ public class Alias extends Expression {
     @Override
     public int getNullable() {
         return expr.getNullable();
-    }
-
-    @Override
-    public boolean isEverything(ExpressionVisitor visitor) {
-        return expr.isEverything(visitor);
     }
 
     @Override
@@ -119,7 +109,7 @@ public class Alias extends Expression {
     }
 
     @Override
-    public <R> R accept(IExpressionVisitor<R> visitor) {
+    public <R> R accept(ExpressionVisitor<R> visitor) {
         return visitor.visitAlias(this);
     }
 }

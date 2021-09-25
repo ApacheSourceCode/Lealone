@@ -9,7 +9,6 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.Set;
-import java.util.TreeSet;
 
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.util.StringUtils;
@@ -21,9 +20,13 @@ import org.lealone.db.table.Column;
 import org.lealone.db.value.DataType;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueArray;
-import org.lealone.sql.expression.evaluator.HotSpotEvaluator;
+import org.lealone.sql.expression.visitor.CalculateVisitor;
 import org.lealone.sql.expression.visitor.ExpressionVisitorFactory;
-import org.lealone.sql.expression.visitor.IExpressionVisitor;
+import org.lealone.sql.expression.visitor.ExpressionVisitor;
+import org.lealone.sql.expression.visitor.MapColumnsVisitor;
+import org.lealone.sql.expression.visitor.MergeAggregateVisitor;
+import org.lealone.sql.expression.visitor.UpdateAggregateVisitor;
+import org.lealone.sql.expression.visitor.UpdateVectorizedAggregateVisitor;
 import org.lealone.sql.optimizer.ColumnResolver;
 import org.lealone.sql.optimizer.TableFilter;
 import org.lealone.sql.vector.ValueVector;
@@ -52,6 +55,12 @@ public abstract class Expression implements org.lealone.sql.IExpression {
     public abstract Value getValue(ServerSession session);
 
     public ValueVector getValueVector(ServerSession session) {
+        return getValueVector(session, null);
+    }
+
+    // public abstract ValueVector getValueVector(ServerSession session, ValueVector bvv);
+
+    public ValueVector getValueVector(ServerSession session, ValueVector bvv) {
         return null;
     }
 
@@ -70,7 +79,9 @@ public abstract class Expression implements org.lealone.sql.IExpression {
      * @param resolver the column resolver
      * @param level the subquery nesting level
      */
-    public abstract void mapColumns(ColumnResolver resolver, int level);
+    public void mapColumns(ColumnResolver resolver, int level) {
+        accept(new MapColumnsVisitor(resolver, level));
+    }
 
     /**
      * Try to optimize the expression.
@@ -134,19 +145,13 @@ public abstract class Expression implements org.lealone.sql.IExpression {
      *
      * @param session the session
      */
-    public abstract void updateAggregate(ServerSession session);
-
-    public void updateAggregate(ServerSession session, ValueVector bvv) {
+    public void updateAggregate(ServerSession session) {
+        accept(new UpdateAggregateVisitor(session));
     }
 
-    /**
-     * Check if this expression and all sub-expressions can fulfill a criteria.
-     * If any part returns false, the result is false.
-     *
-     * @param visitor the visitor
-     * @return if the criteria can be fulfilled
-     */
-    public abstract boolean isEverything(ExpressionVisitor visitor);
+    public void updateVectorizedAggregate(ServerSession session, ValueVector bvv) {
+        accept(new UpdateVectorizedAggregateVisitor(session, bvv));
+    }
 
     /**
      * Estimate the cost to process the expression.
@@ -298,10 +303,14 @@ public abstract class Expression implements org.lealone.sql.IExpression {
      * @param outerJoin if the expression is part of an outer join
      */
     public void addFilterConditions(TableFilter filter, boolean outerJoin) {
-        if (!addedToFilter && !outerJoin && isEverything(ExpressionVisitor.EVALUATABLE_VISITOR)) {
+        if (!addedToFilter && !outerJoin && isEvaluatable()) {
             filter.addFilterCondition(this, false);
             addedToFilter = true;
         }
+    }
+
+    public boolean isEvaluatable() {
+        return accept(ExpressionVisitorFactory.getEvaluatableVisitor());
     }
 
     /**
@@ -372,9 +381,11 @@ public abstract class Expression implements org.lealone.sql.IExpression {
     }
 
     public void mergeAggregate(ServerSession session, Value v) {
+        accept(new MergeAggregateVisitor(session, v));
     }
 
     public void calculate(Calculator calculator) {
+        accept(new CalculateVisitor(calculator));
     }
 
     public Value getMergedValue(ServerSession session) {
@@ -393,22 +404,7 @@ public abstract class Expression implements org.lealone.sql.IExpression {
         accept(ExpressionVisitorFactory.getColumnsVisitor((Set<Column>) columns));
     }
 
-    // 默认回退到解释执行的方式
-    public void genCode(HotSpotEvaluator evaluator, StringBuilder buff, TreeSet<String> importSet, int level,
-            String retVar) {
-        StringBuilder indent = indent((level + 1) * 4);
-        evaluator.addExpression(this);
-        buff.append(indent).append(retVar).append(" = evaluator.getExpression(")
-                .append(evaluator.getExpressionListSize() - 1).append(").getValue(session);\r\n");
+    public <R> R accept(ExpressionVisitor<R> visitor) {
+        return visitor.visitExpression(this);
     }
-
-    public static StringBuilder indent(int size) {
-        StringBuilder indent = new StringBuilder(size);
-        for (int i = 0; i < size; i++) {
-            indent.append(' ');
-        }
-        return indent;
-    }
-
-    public abstract <R> R accept(IExpressionVisitor<R> visitor);
 }

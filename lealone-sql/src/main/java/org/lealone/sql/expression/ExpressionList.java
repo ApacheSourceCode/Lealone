@@ -10,8 +10,9 @@ import org.lealone.db.session.ServerSession;
 import org.lealone.db.table.Column;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueArray;
-import org.lealone.sql.expression.visitor.IExpressionVisitor;
-import org.lealone.sql.optimizer.ColumnResolver;
+import org.lealone.sql.expression.visitor.ExpressionVisitor;
+import org.lealone.sql.vector.ValueVector;
+import org.lealone.sql.vector.ValueVectorArray;
 
 /**
  * A list of expressions, as in (ID, NAME).
@@ -39,15 +40,17 @@ public class ExpressionList extends Expression {
     }
 
     @Override
-    public int getType() {
-        return Value.ARRAY;
+    public ValueVector getValueVector(ServerSession session, ValueVector bvv) {
+        ValueVector[] a = new ValueVector[list.length];
+        for (int i = 0; i < list.length; i++) {
+            a[i] = list[i].getValueVector(session, bvv);
+        }
+        return new ValueVectorArray(a);
     }
 
     @Override
-    public void mapColumns(ColumnResolver resolver, int level) {
-        for (Expression e : list) {
-            e.mapColumns(resolver, level);
-        }
+    public int getType() {
+        return Value.ARRAY;
     }
 
     @Override
@@ -95,23 +98,6 @@ public class ExpressionList extends Expression {
     }
 
     @Override
-    public void updateAggregate(ServerSession session) {
-        for (Expression e : list) {
-            e.updateAggregate(session);
-        }
-    }
-
-    @Override
-    public boolean isEverything(ExpressionVisitor visitor) {
-        for (Expression e : list) {
-            if (!e.isEverything(visitor)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    @Override
     public int getCost() {
         int cost = 1;
         for (Expression e : list) {
@@ -132,7 +118,7 @@ public class ExpressionList extends Expression {
     }
 
     @Override
-    public <R> R accept(IExpressionVisitor<R> visitor) {
+    public <R> R accept(ExpressionVisitor<R> visitor) {
         return visitor.visitExpressionList(this);
     }
 }

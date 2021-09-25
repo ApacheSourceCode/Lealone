@@ -29,37 +29,26 @@ import org.lealone.sql.expression.Expression;
 
 /**
  * A table backed by a system or user-defined function that returns a result set.
+ * 
+ * @author H2 Group
+ * @author zhh
  */
 public class FunctionTable extends Table {
 
-    private final FunctionCall function;
-    private final long rowCount;
-    private Expression functionExpr;
+    private final Function function;
+    private final Expression functionExpr;
     private LocalResult cachedResult;
     private Value cachedValue;
 
-    public FunctionTable(Schema schema, ServerSession session, Expression functionExpr, FunctionCall function) {
+    public FunctionTable(Schema schema, ServerSession session, Function function) {
         super(schema, 0, function.getName(), false, true);
-        this.functionExpr = functionExpr;
         this.function = function;
-        if (function instanceof TableFunction) {
-            rowCount = ((TableFunction) function).getRowCount();
-        } else {
-            rowCount = Long.MAX_VALUE;
-        }
-        function.optimize(session);
+        functionExpr = function.optimize(session);
         int type = function.getType();
         if (type != Value.RESULT_SET) {
             throw DbException.get(ErrorCode.FUNCTION_MUST_RETURN_RESULT_SET_1, function.getName());
         }
-        Expression[] args = function.getArgs();
-        int numParams = args.length;
-        Expression[] columnListArgs = new Expression[numParams];
-        for (int i = 0; i < numParams; i++) {
-            args[i] = args[i].optimize(session);
-            columnListArgs[i] = args[i];
-        }
-        ValueResultSet template = function.getValueForColumnList(session, columnListArgs);
+        ValueResultSet template = function.getValueForColumnList(session, function.getArgs());
         if (template == null) {
             throw DbException.get(ErrorCode.FUNCTION_MUST_RETURN_RESULT_SET_1, function.getName());
         }
@@ -95,9 +84,7 @@ public class FunctionTable extends Table {
 
     @Override
     public long getMaxDataModificationId() {
-        // TODO optimization: table-as-a-function currently doesn't know the
-        // last modified date
-        return Long.MAX_VALUE;
+        return database.getModificationDataId();
     }
 
     @Override
@@ -117,17 +104,17 @@ public class FunctionTable extends Table {
 
     @Override
     public boolean canGetRowCount() {
-        return rowCount != Long.MAX_VALUE;
+        return false;
     }
 
     @Override
     public long getRowCount(ServerSession session) {
-        return rowCount;
+        return Long.MAX_VALUE;
     }
 
     @Override
     public long getRowCountApproximation() {
-        return rowCount;
+        return Long.MAX_VALUE;
     }
 
     @Override
@@ -182,7 +169,6 @@ public class FunctionTable extends Table {
     }
 
     private ValueResultSet getValueResultSet(ServerSession session) {
-        functionExpr = functionExpr.optimize(session);
         Value v = functionExpr.getValue(session);
         if (v == ValueNull.INSTANCE) {
             return null;
@@ -190,8 +176,7 @@ public class FunctionTable extends Table {
         return (ValueResultSet) v;
     }
 
-    public boolean isBufferResultSetToLocalTemp() {
+    boolean isBufferResultSetToLocalTemp() {
         return function.isBufferResultSetToLocalTemp();
     }
-
 }

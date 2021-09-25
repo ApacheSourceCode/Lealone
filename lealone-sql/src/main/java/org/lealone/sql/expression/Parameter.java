@@ -5,8 +5,6 @@
  */
 package org.lealone.sql.expression;
 
-import java.util.TreeSet;
-
 import org.lealone.common.exceptions.DbException;
 import org.lealone.db.CommandParameter;
 import org.lealone.db.api.ErrorCode;
@@ -16,9 +14,9 @@ import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueBoolean;
 import org.lealone.db.value.ValueNull;
 import org.lealone.sql.expression.condition.Comparison;
-import org.lealone.sql.expression.evaluator.HotSpotEvaluator;
-import org.lealone.sql.expression.visitor.IExpressionVisitor;
-import org.lealone.sql.optimizer.ColumnResolver;
+import org.lealone.sql.expression.visitor.ExpressionVisitor;
+import org.lealone.sql.vector.SingleValueVector;
+import org.lealone.sql.vector.ValueVector;
 
 /**
  * A parameter of a prepared statement.
@@ -69,6 +67,11 @@ public class Parameter extends Expression implements CommandParameter {
     }
 
     @Override
+    public ValueVector getValueVector(ServerSession session, ValueVector bvv) {
+        return new SingleValueVector(getValue(session));
+    }
+
+    @Override
     public int getType() {
         if (value != null) {
             return value.getType();
@@ -77,11 +80,6 @@ public class Parameter extends Expression implements CommandParameter {
             return column.getType();
         }
         return Value.UNKNOWN;
-    }
-
-    @Override
-    public void mapColumns(ColumnResolver resolver, int level) {
-        // can't map
     }
 
     @Override
@@ -148,32 +146,6 @@ public class Parameter extends Expression implements CommandParameter {
     }
 
     @Override
-    public void updateAggregate(ServerSession session) {
-        // nothing to do
-    }
-
-    @Override
-    public boolean isEverything(ExpressionVisitor visitor) {
-        switch (visitor.getType()) {
-        case ExpressionVisitor.EVALUATABLE:
-            // the parameter _will_be_ evaluatable at execute time
-        case ExpressionVisitor.SET_MAX_DATA_MODIFICATION_ID:
-            // it is checked independently if the value is the same as the last time
-        case ExpressionVisitor.NOT_FROM_RESOLVER:
-        case ExpressionVisitor.QUERY_COMPARABLE:
-        case ExpressionVisitor.GET_DEPENDENCIES:
-        case ExpressionVisitor.OPTIMIZABLE_MIN_MAX_COUNT_ALL:
-        case ExpressionVisitor.DETERMINISTIC:
-        case ExpressionVisitor.GET_COLUMNS:
-            return true;
-        case ExpressionVisitor.INDEPENDENT:
-            return value != null;
-        default:
-            throw DbException.getInternalError("type=" + visitor.getType());
-        }
-    }
-
-    @Override
     public int getCost() {
         return 0;
     }
@@ -188,21 +160,7 @@ public class Parameter extends Expression implements CommandParameter {
     }
 
     @Override
-    public void genCode(HotSpotEvaluator evaluator, StringBuilder buff, TreeSet<String> importSet, int level,
-            String retVar) {
-        StringBuilder indent = indent((level + 1) * 4);
-        if (value == null) {
-            importSet.add(ValueNull.class.getName());
-            buff.append(indent).append(retVar).append(" = ValueNull.INSTANCE;\r\n");
-        } else {
-            evaluator.addValue(value);
-            buff.append(indent).append(retVar).append(" = evaluator.getValue(").append(evaluator.getValueListSize() - 1)
-                    .append(");\r\n");
-        }
-    }
-
-    @Override
-    public <R> R accept(IExpressionVisitor<R> visitor) {
+    public <R> R accept(ExpressionVisitor<R> visitor) {
         return visitor.visitParameter(this);
     }
 }

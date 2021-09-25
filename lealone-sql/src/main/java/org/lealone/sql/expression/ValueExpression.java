@@ -5,18 +5,13 @@
  */
 package org.lealone.sql.expression;
 
-import java.util.TreeSet;
-
-import org.lealone.common.exceptions.DbException;
 import org.lealone.db.session.ServerSession;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueArray;
 import org.lealone.db.value.ValueBoolean;
 import org.lealone.db.value.ValueNull;
 import org.lealone.sql.expression.condition.Comparison;
-import org.lealone.sql.expression.evaluator.HotSpotEvaluator;
-import org.lealone.sql.expression.visitor.IExpressionVisitor;
-import org.lealone.sql.optimizer.ColumnResolver;
+import org.lealone.sql.expression.visitor.ExpressionVisitor;
 import org.lealone.sql.optimizer.IndexCondition;
 import org.lealone.sql.optimizer.TableFilter;
 import org.lealone.sql.vector.SingleValueVector;
@@ -81,7 +76,7 @@ public class ValueExpression extends Expression {
     }
 
     @Override
-    public ValueVector getValueVector(ServerSession session) {
+    public ValueVector getValueVector(ServerSession session, ValueVector bvv) {
         return new SingleValueVector(value);
     }
 
@@ -100,11 +95,6 @@ public class ValueExpression extends Expression {
     @Override
     public Expression getNotIfPossible(ServerSession session) {
         return new Comparison(session, Comparison.EQUAL, this, ValueExpression.get(ValueBoolean.get(false)));
-    }
-
-    @Override
-    public void mapColumns(ColumnResolver resolver, int level) {
-        // nothing to do
     }
 
     @Override
@@ -146,29 +136,6 @@ public class ValueExpression extends Expression {
     }
 
     @Override
-    public void updateAggregate(ServerSession session) {
-        // nothing to do
-    }
-
-    @Override
-    public boolean isEverything(ExpressionVisitor visitor) {
-        switch (visitor.getType()) {
-        case ExpressionVisitor.OPTIMIZABLE_MIN_MAX_COUNT_ALL:
-        case ExpressionVisitor.DETERMINISTIC:
-        case ExpressionVisitor.INDEPENDENT:
-        case ExpressionVisitor.EVALUATABLE:
-        case ExpressionVisitor.SET_MAX_DATA_MODIFICATION_ID:
-        case ExpressionVisitor.NOT_FROM_RESOLVER:
-        case ExpressionVisitor.GET_DEPENDENCIES:
-        case ExpressionVisitor.QUERY_COMPARABLE:
-        case ExpressionVisitor.GET_COLUMNS:
-            return true;
-        default:
-            throw DbException.getInternalError("type=" + visitor.getType());
-        }
-    }
-
-    @Override
     public int getCost() {
         return 0;
     }
@@ -182,16 +149,7 @@ public class ValueExpression extends Expression {
     }
 
     @Override
-    public void genCode(HotSpotEvaluator evaluator, StringBuilder buff, TreeSet<String> importSet, int level,
-            String retVar) {
-        StringBuilder indent = indent((level + 1) * 4);
-        evaluator.addValue(value);
-        buff.append(indent).append(retVar).append(" = evaluator.getValue(").append(evaluator.getValueListSize() - 1)
-                .append(");\r\n");
-    }
-
-    @Override
-    public <R> R accept(IExpressionVisitor<R> visitor) {
+    public <R> R accept(ExpressionVisitor<R> visitor) {
         return visitor.visitValueExpression(this);
     }
 }

@@ -29,9 +29,8 @@ import org.lealone.sql.SQLStatement;
 import org.lealone.sql.executor.YieldableBase;
 import org.lealone.sql.expression.Expression;
 import org.lealone.sql.expression.ExpressionColumn;
-import org.lealone.sql.expression.ExpressionVisitor;
 import org.lealone.sql.expression.Parameter;
-import org.lealone.sql.expression.visitor.IExpressionVisitor;
+import org.lealone.sql.expression.visitor.ExpressionVisitor;
 import org.lealone.sql.optimizer.ColumnResolver;
 import org.lealone.sql.optimizer.TableFilter;
 import org.lealone.sql.query.sharding.YieldableShardingQuery;
@@ -246,21 +245,8 @@ public class SelectUnion extends Query implements ISelectUnion {
     }
 
     @Override
-    public boolean isEverything(ExpressionVisitor visitor) {
-        return left.isEverything(visitor) && right.isEverything(visitor);
-    }
-
-    @Override
-    public <R> R accept(IExpressionVisitor<R> visitor) {
-        left.accept(visitor);
-        right.accept(visitor);
-        return null;
-    }
-
-    @Override
-    public void updateAggregate(ServerSession s) {
-        left.updateAggregate(s);
-        right.updateAggregate(s);
+    public <R> R accept(ExpressionVisitor<R> visitor) {
+        return visitor.visitSelectUnion(this);
     }
 
     @Override

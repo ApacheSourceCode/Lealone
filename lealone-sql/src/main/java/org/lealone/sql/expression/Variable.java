@@ -5,15 +5,12 @@
  */
 package org.lealone.sql.expression;
 
-import java.util.TreeSet;
-
-import org.lealone.common.exceptions.DbException;
 import org.lealone.db.session.ServerSession;
 import org.lealone.db.value.Value;
 import org.lealone.sql.Parser;
-import org.lealone.sql.expression.evaluator.HotSpotEvaluator;
-import org.lealone.sql.expression.visitor.IExpressionVisitor;
-import org.lealone.sql.optimizer.ColumnResolver;
+import org.lealone.sql.expression.visitor.ExpressionVisitor;
+import org.lealone.sql.vector.SingleValueVector;
+import org.lealone.sql.vector.ValueVector;
 
 /**
  * A user-defined variable, for example: @ID.
@@ -65,29 +62,8 @@ public class Variable extends Expression {
     }
 
     @Override
-    public boolean isEverything(ExpressionVisitor visitor) {
-        switch (visitor.getType()) {
-        case ExpressionVisitor.EVALUATABLE:
-            // the value will be evaluated at execute time
-        case ExpressionVisitor.SET_MAX_DATA_MODIFICATION_ID:
-            // it is checked independently if the value is the same as the last time
-        case ExpressionVisitor.OPTIMIZABLE_MIN_MAX_COUNT_ALL:
-        case ExpressionVisitor.INDEPENDENT:
-        case ExpressionVisitor.NOT_FROM_RESOLVER:
-        case ExpressionVisitor.QUERY_COMPARABLE:
-        case ExpressionVisitor.GET_DEPENDENCIES:
-        case ExpressionVisitor.GET_COLUMNS:
-            return true;
-        case ExpressionVisitor.DETERMINISTIC:
-            return false;
-        default:
-            throw DbException.getInternalError("type=" + visitor.getType());
-        }
-    }
-
-    @Override
-    public void mapColumns(ColumnResolver resolver, int level) {
-        // nothing to do
+    public ValueVector getValueVector(ServerSession session, ValueVector bvv) {
+        return new SingleValueVector(getValue(session));
     }
 
     @Override
@@ -95,24 +71,12 @@ public class Variable extends Expression {
         return this;
     }
 
-    @Override
-    public void updateAggregate(ServerSession session) {
-        // nothing to do
-    }
-
     public String getName() {
         return name;
     }
 
     @Override
-    public void genCode(HotSpotEvaluator evaluator, StringBuilder buff, TreeSet<String> importSet, int level,
-            String retVar) {
-        StringBuilder indent = indent((level + 1) * 4);
-        buff.append(indent).append(retVar).append(" = session.getVariable(\"").append(name).append("\");\r\n");
-    }
-
-    @Override
-    public <R> R accept(IExpressionVisitor<R> visitor) {
+    public <R> R accept(ExpressionVisitor<R> visitor) {
         return visitor.visitVariable(this);
     }
 }

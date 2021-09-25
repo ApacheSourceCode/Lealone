@@ -5,18 +5,14 @@
  */
 package org.lealone.sql.expression.condition;
 
-import java.util.TreeSet;
-
 import org.lealone.db.session.ServerSession;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueNull;
 import org.lealone.sql.expression.Expression;
-import org.lealone.sql.expression.ExpressionVisitor;
 import org.lealone.sql.expression.ValueExpression;
-import org.lealone.sql.expression.evaluator.HotSpotEvaluator;
-import org.lealone.sql.expression.visitor.IExpressionVisitor;
-import org.lealone.sql.optimizer.ColumnResolver;
+import org.lealone.sql.expression.visitor.ExpressionVisitor;
 import org.lealone.sql.optimizer.TableFilter;
+import org.lealone.sql.vector.ValueVector;
 
 /**
  * A NOT condition.
@@ -48,8 +44,8 @@ public class ConditionNot extends Condition {
     }
 
     @Override
-    public void mapColumns(ColumnResolver resolver, int level) {
-        condition.mapColumns(resolver, level);
+    public ValueVector getValueVector(ServerSession session, ValueVector bvv) {
+        return condition.getValueVector(session).negate();
     }
 
     @Override
@@ -76,11 +72,6 @@ public class ConditionNot extends Condition {
     }
 
     @Override
-    public void updateAggregate(ServerSession session) {
-        condition.updateAggregate(session);
-    }
-
-    @Override
     public void addFilterConditions(TableFilter filter, boolean outerJoin) {
         if (outerJoin) {
             // can not optimize:
@@ -95,36 +86,12 @@ public class ConditionNot extends Condition {
     }
 
     @Override
-    public boolean isEverything(ExpressionVisitor visitor) {
-        return condition.isEverything(visitor);
-    }
-
-    @Override
     public int getCost() {
         return condition.getCost();
     }
 
     @Override
-    public void genCode(HotSpotEvaluator evaluator, StringBuilder buff, TreeSet<String> importSet, int level,
-            String retVar) {
-        importSet.add(ValueNull.class.getName());
-        importSet.add(Value.class.getName());
-
-        StringBuilder indent = indent((level + 1) * 4);
-
-        buff.append(indent).append("{\r\n");
-        String retVarLeft = "lret" + (level + 1);
-        buff.append(indent).append("    Value ").append(retVarLeft).append(";\r\n");
-        condition.genCode(evaluator, buff, importSet, level + 1, retVarLeft);
-
-        buff.append("    ").append(indent).append(retVar).append(" = ").append(retVarLeft)
-                .append(" == ValueNull.INSTANCE ? ").append(retVarLeft).append(" : ").append(retVarLeft)
-                .append(".convertTo(Value.BOOLEAN).negate();\r\n");
-        buff.append(indent).append("}").append("\r\n");
-    }
-
-    @Override
-    public <R> R accept(IExpressionVisitor<R> visitor) {
+    public <R> R accept(ExpressionVisitor<R> visitor) {
         return visitor.visitConditionNot(this);
     }
 }

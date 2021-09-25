@@ -7,9 +7,7 @@ package org.lealone.sql.expression.condition;
 
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.TreeSet;
 
-import org.lealone.common.exceptions.DbException;
 import org.lealone.common.util.StatementBuilder;
 import org.lealone.db.session.ServerSession;
 import org.lealone.db.value.Value;
@@ -17,10 +15,7 @@ import org.lealone.db.value.ValueBoolean;
 import org.lealone.db.value.ValueNull;
 import org.lealone.sql.expression.Expression;
 import org.lealone.sql.expression.ExpressionColumn;
-import org.lealone.sql.expression.ExpressionVisitor;
-import org.lealone.sql.expression.evaluator.HotSpotEvaluator;
-import org.lealone.sql.expression.visitor.IExpressionVisitor;
-import org.lealone.sql.optimizer.ColumnResolver;
+import org.lealone.sql.expression.visitor.ExpressionVisitor;
 import org.lealone.sql.optimizer.IndexCondition;
 import org.lealone.sql.optimizer.TableFilter;
 
@@ -59,6 +54,14 @@ public class ConditionInConstantSet extends Condition {
         return left;
     }
 
+    public HashSet<Value> getValueSet() {
+        return valueSet;
+    }
+
+    public void setQueryLevel(int level) {
+        this.queryLevel = Math.max(level, this.queryLevel);
+    }
+
     @Override
     public Value getValue(ServerSession session) {
         Value x = left.getValue(session);
@@ -73,12 +76,6 @@ public class ConditionInConstantSet extends Condition {
             }
         }
         return ValueBoolean.get(result);
-    }
-
-    @Override
-    public void mapColumns(ColumnResolver resolver, int level) {
-        left.mapColumns(resolver, level);
-        this.queryLevel = Math.max(level, this.queryLevel);
     }
 
     @Override
@@ -114,32 +111,6 @@ public class ConditionInConstantSet extends Condition {
     }
 
     @Override
-    public void updateAggregate(ServerSession session) {
-        // nothing to do
-    }
-
-    @Override
-    public boolean isEverything(ExpressionVisitor visitor) {
-        if (!left.isEverything(visitor)) {
-            return false;
-        }
-        switch (visitor.getType()) {
-        case ExpressionVisitor.OPTIMIZABLE_MIN_MAX_COUNT_ALL:
-        case ExpressionVisitor.DETERMINISTIC:
-        case ExpressionVisitor.INDEPENDENT:
-        case ExpressionVisitor.EVALUATABLE:
-        case ExpressionVisitor.SET_MAX_DATA_MODIFICATION_ID:
-        case ExpressionVisitor.NOT_FROM_RESOLVER:
-        case ExpressionVisitor.GET_DEPENDENCIES:
-        case ExpressionVisitor.QUERY_COMPARABLE:
-        case ExpressionVisitor.GET_COLUMNS:
-            return true;
-        default:
-            throw DbException.getInternalError("type=" + visitor.getType());
-        }
-    }
-
-    @Override
     public int getCost() {
         int cost = left.getCost();
         return cost;
@@ -165,38 +136,7 @@ public class ConditionInConstantSet extends Condition {
     }
 
     @Override
-    public void genCode(HotSpotEvaluator evaluator, StringBuilder buff, TreeSet<String> importSet, int level,
-            String retVar) {
-        importSet.add(ValueNull.class.getName());
-        importSet.add(ValueBoolean.class.getName());
-        evaluator.setValueSet(valueSet);
-
-        StringBuilder indent = indent((level + 1) * 4);
-
-        buff.append(indent).append("{\r\n");
-        String retVarLeft = "lret" + (level + 1);
-        buff.append(indent).append("    Value ").append(retVarLeft).append(";\r\n");
-        left.genCode(evaluator, buff, importSet, level + 1, retVarLeft);
-
-        buff.append("    ").append(indent).append("if (").append(retVarLeft).append(" == ValueNull.INSTANCE) {\r\n");
-        buff.append("    ").append(indent).append("    ").append(retVar).append(" = ").append(retVarLeft)
-                .append(";\r\n");
-        buff.append("    ").append(indent).append("} else if (evaluator.getValueSet().contains(").append(retVarLeft)
-                .append(")) {\r\n");
-        buff.append("    ").append(indent).append("    ").append(retVar).append(" = ValueBoolean.TRUE;\r\n");
-        buff.append("    ").append(indent).append("} else {\r\n");
-        buff.append("    ").append(indent).append("    ").append(retVar);
-        if (valueSet.contains(ValueNull.INSTANCE)) {
-            buff.append(" = ValueNull.INSTANCE;\r\n");
-        } else {
-            buff.append(" = ValueBoolean.FALSE;\r\n");
-        }
-        buff.append("    ").append(indent).append("}\r\n");
-        buff.append(indent).append("}").append("\r\n");
-    }
-
-    @Override
-    public <R> R accept(IExpressionVisitor<R> visitor) {
+    public <R> R accept(ExpressionVisitor<R> visitor) {
         return visitor.visitConditionInConstantSet(this);
     }
 }

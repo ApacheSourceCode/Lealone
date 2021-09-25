@@ -16,10 +16,10 @@ import org.lealone.db.value.ValueArray;
 import org.lealone.db.value.ValueNull;
 import org.lealone.sql.expression.Expression;
 import org.lealone.sql.expression.ExpressionList;
-import org.lealone.sql.expression.ExpressionVisitor;
-import org.lealone.sql.expression.visitor.IExpressionVisitor;
-import org.lealone.sql.optimizer.ColumnResolver;
+import org.lealone.sql.expression.visitor.ExpressionVisitor;
 import org.lealone.sql.query.Query;
+import org.lealone.sql.vector.SingleValueVector;
+import org.lealone.sql.vector.ValueVector;
 
 /**
  * A query returning a single value.
@@ -65,13 +65,13 @@ public class SubQuery extends Expression {
     }
 
     @Override
-    public int getType() {
-        return getExpression().getType();
+    public ValueVector getValueVector(ServerSession session, ValueVector bvv) {
+        return new SingleValueVector(getValue(session));
     }
 
     @Override
-    public void mapColumns(ColumnResolver resolver, int level) {
-        query.mapColumns(resolver, level + 1);
+    public int getType() {
+        return getExpression().getType();
     }
 
     @Override
@@ -100,11 +100,6 @@ public class SubQuery extends Expression {
         return "(" + query.getPlanSQL() + ")";
     }
 
-    @Override
-    public void updateAggregate(ServerSession session) {
-        query.updateAggregate(session);
-    }
-
     private Expression getExpression() {
         if (expression == null) {
             ArrayList<Expression> expressions = query.getExpressions();
@@ -122,11 +117,6 @@ public class SubQuery extends Expression {
         return expression;
     }
 
-    @Override
-    public boolean isEverything(ExpressionVisitor visitor) {
-        return query.isEverything(visitor);
-    }
-
     public Query getQuery() {
         return query;
     }
@@ -142,7 +132,7 @@ public class SubQuery extends Expression {
     }
 
     @Override
-    public <R> R accept(IExpressionVisitor<R> visitor) {
+    public <R> R accept(ExpressionVisitor<R> visitor) {
         return visitor.visitSubQuery(this);
     }
 }
