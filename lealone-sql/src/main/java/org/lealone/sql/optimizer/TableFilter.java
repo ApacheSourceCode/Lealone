@@ -177,8 +177,7 @@ public class TableFilter extends ColumnResolverBase {
     }
 
     /**
-     * Get the best plan item (index, cost) to use use for the current join
-     * order.
+     * Get the best plan item (index, cost) to use for the current join order.
      *
      * @param s the session
      * @param level 1 for the first table in a join, 2 for the second, and so on
@@ -295,6 +294,14 @@ public class TableFilter extends ColumnResolverBase {
         if (joinCondition != null) {
             joinCondition = joinCondition.optimize(session);
         }
+    }
+
+    // 为单表update/delete/select寻找一个执行计划
+    public PlanItem preparePlan(ServerSession s, int level) {
+        PlanItem item = getBestPlanItem(s, level);
+        setPlanItem(item);
+        prepare();
+        return item;
     }
 
     /**
@@ -438,15 +445,10 @@ public class TableFilter extends ColumnResolverBase {
 
     private void checkTimeout() {
         session.checkCanceled();
-        // System.out.println(this.alias+ " " + table.getName() + ": " +
-        // scanCount);
     }
 
     private boolean isOk(Expression condition) {
-        if (condition == null) {
-            return true;
-        }
-        return condition.getBooleanValue(session);
+        return condition == null || condition.getBooleanValue(session);
     }
 
     /**
@@ -467,8 +469,6 @@ public class TableFilter extends ColumnResolverBase {
      * @param current the current row
      */
     public void set(Row current) {
-        // this is currently only used so that check constraints work - to set
-        // the current (new) row
         this.current = current;
         this.currentSearchRow = current;
     }
@@ -504,20 +504,15 @@ public class TableFilter extends ColumnResolverBase {
      */
     public void addFilterCondition(Expression condition, boolean isJoin) {
         if (isJoin) {
-            if (joinCondition == null) {
-                joinCondition = condition;
-            } else {
-                joinCondition = (Expression) session.getDatabase().getSQLEngine().createConditionAndOr(true,
-                        joinCondition, condition);
-            }
+            joinCondition = createCondition(joinCondition, condition);
         } else {
-            if (filterCondition == null) {
-                filterCondition = condition;
-            } else {
-                filterCondition = (Expression) session.getDatabase().getSQLEngine().createConditionAndOr(true,
-                        filterCondition, condition);
-            }
+            filterCondition = createCondition(filterCondition, condition);
         }
+    }
+
+    private Expression createCondition(Expression oldC, Expression newC) {
+        return oldC == null ? newC
+                : (Expression) session.getDatabase().getSQLEngine().createConditionAndOr(true, oldC, newC);
     }
 
     /**
@@ -775,17 +770,15 @@ public class TableFilter extends ColumnResolverBase {
     /**
      * Optimize the full condition. This will add the full condition to the
      * filter condition.
-     *
-     * @param fromOuterJoin if this method was called from an outer joined table
      */
-    void optimizeFullCondition(boolean fromOuterJoin) {
+    void optimizeFullCondition() {
         if (fullCondition != null) {
-            fullCondition.addFilterConditions(this, fromOuterJoin || joinOuter);
+            fullCondition.addFilterConditions(this, joinOuter);
             if (nestedJoin != null) {
-                nestedJoin.optimizeFullCondition(fromOuterJoin || joinOuter);
+                nestedJoin.optimizeFullCondition();
             }
             if (join != null) {
-                join.optimizeFullCondition(fromOuterJoin || joinOuter);
+                join.optimizeFullCondition();
             }
         }
     }

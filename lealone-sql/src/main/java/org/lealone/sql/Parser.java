@@ -553,7 +553,6 @@ public class Parser implements SQLParser {
         } else {
             throw getSyntaxError();
         }
-
     }
 
     private StatementBase parseShutdownServer() {
@@ -1403,7 +1402,27 @@ public class Parser implements SQLParser {
     private Query parseSelectUnion() {
         int start = lastParseIndex;
         Query command = parseSelectSub();
-        return parseSelectUnionExtension(command, start);
+        while (true) {
+            int type;
+            if (readIf("UNION")) {
+                if (readIf("ALL")) {
+                    type = SelectUnion.UNION_ALL;
+                } else {
+                    readIf("DISTINCT");
+                    type = SelectUnion.UNION;
+                }
+            } else if (readIf("MINUS") || readIf("EXCEPT")) {
+                type = SelectUnion.EXCEPT;
+            } else if (readIf("INTERSECT")) {
+                type = SelectUnion.INTERSECT;
+            } else {
+                break;
+            }
+            command = new SelectUnion(session, type, command, parseSelectSub());
+        }
+        parseEndOfQuery(command);
+        setSQL(command, null, start);
+        return command;
     }
 
     private Query parseSelectSub() {
@@ -1472,37 +1491,6 @@ public class Parser implements SQLParser {
         command.setParameterList(parameters);
         currentSelect = oldSelect;
         setSQL(command, "SELECT", start);
-        return command;
-    }
-
-    private Query parseSelectUnionExtension(Query command, int start) {
-        while (true) {
-            if (readIf("UNION")) {
-                SelectUnion union = new SelectUnion(session, command);
-                if (readIf("ALL")) {
-                    union.setUnionType(SelectUnion.UNION_ALL);
-                } else {
-                    readIf("DISTINCT");
-                    union.setUnionType(SelectUnion.UNION);
-                }
-                union.setRight(parseSelectSub());
-                command = union;
-            } else if (readIf("MINUS") || readIf("EXCEPT")) {
-                SelectUnion union = new SelectUnion(session, command);
-                union.setUnionType(SelectUnion.EXCEPT);
-                union.setRight(parseSelectSub());
-                command = union;
-            } else if (readIf("INTERSECT")) {
-                SelectUnion union = new SelectUnion(session, command);
-                union.setUnionType(SelectUnion.INTERSECT);
-                union.setRight(parseSelectSub());
-                command = union;
-            } else {
-                break;
-            }
-        }
-        parseEndOfQuery(command);
-        setSQL(command, null, start);
         return command;
     }
 
@@ -1683,7 +1671,7 @@ public class Parser implements SQLParser {
             } else {
                 TableFilter top;
                 top = readTableFilter();
-                top = readJoin(top, currentSelect);
+                top = readJoin(top);
                 read(")");
                 alias = readFromAlias(null);
                 if (alias != null) {
@@ -1757,7 +1745,7 @@ public class Parser implements SQLParser {
     }
 
     private void parseJoinTableFilter(TableFilter top, final Select command) {
-        top = readJoin(top, command);
+        top = readJoin(top);
         command.addTableFilter(top, true);
         boolean isOuter = false;
         while (true) {
@@ -1784,6 +1772,10 @@ public class Parser implements SQLParser {
                     command.addCondition(on);
                 }
                 join.removeJoinCondition();
+                // 在JoinTest1中删除join字段，这样JoinTest1和JoinTest2就断开了，
+                // 如sql = "SELECT rownum, * FROM JoinTest1 JOIN JoinTest2 ON id>30";
+                // 但是在Optimizer.optimize()
+                // 的 f2[i].addJoin(f2[i + 1], false, null)中又加上
                 top.removeJoin();
                 command.addTableFilter(join, true);
             }
@@ -1791,7 +1783,7 @@ public class Parser implements SQLParser {
         }
     }
 
-    private TableFilter readJoin(TableFilter top, Select command) {
+    private TableFilter readJoin(TableFilter top) {
         TableFilter last = top;
         while (true) {
             if (readIf("RIGHT")) {
@@ -1799,7 +1791,7 @@ public class Parser implements SQLParser {
                 read("JOIN");
                 // the right hand side is the 'inner' table usually
                 TableFilter newTop = readTableFilter();
-                newTop = readJoin(newTop, command);
+                newTop = readJoin(newTop);
                 Expression on = null;
                 if (readIf("ON")) {
                     on = readExpression();
@@ -1811,7 +1803,7 @@ public class Parser implements SQLParser {
                 readIf("OUTER");
                 read("JOIN");
                 TableFilter join = readTableFilter();
-                top = readJoin(top, command);
+                top = readJoin(top);
                 Expression on = null;
                 if (readIf("ON")) {
                     on = readExpression();
@@ -1823,7 +1815,7 @@ public class Parser implements SQLParser {
             } else if (readIf("INNER")) {
                 read("JOIN");
                 TableFilter join = readTableFilter();
-                top = readJoin(top, command);
+                top = readJoin(top);
                 Expression on = null;
                 if (readIf("ON")) {
                     on = readExpression();
@@ -1832,7 +1824,7 @@ public class Parser implements SQLParser {
                 last = join;
             } else if (readIf("JOIN")) {
                 TableFilter join = readTableFilter();
-                top = readJoin(top, command);
+                top = readJoin(top);
                 Expression on = null;
                 if (readIf("ON")) {
                     on = readExpression();
@@ -1892,7 +1884,8 @@ public class Parser implements SQLParser {
     private void addJoin(TableFilter top, TableFilter join, boolean outer, Expression on) {
         if (join.getJoin() != null) {
             String joinTable = Constants.PREFIX_JOIN + parseIndex; // 如：SYSTEM_JOIN_25
-            TableFilter n = new TableFilter(session, getDualTable(false), joinTable, rightsChecked, currentSelect);
+            // 嵌套TableFilter对应的DualTable没有字段
+            TableFilter n = new TableFilter(session, getDualTable(true), joinTable, rightsChecked, currentSelect);
             n.setNestedJoin(join);
             join = n;
         }
