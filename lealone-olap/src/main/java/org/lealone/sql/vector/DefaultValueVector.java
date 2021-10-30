@@ -7,14 +7,13 @@ package org.lealone.sql.vector;
 
 import org.lealone.common.exceptions.DbException;
 import org.lealone.db.value.Value;
-import org.lealone.db.value.ValueString;
 import org.lealone.sql.expression.condition.Comparison;
 
-public class StringVector extends ValueVector {
+public class DefaultValueVector extends ValueVector {
 
-    private String[] values;
+    private Value[] values;
 
-    public StringVector(String[] values) {
+    public DefaultValueVector(Value[] values) {
         this.values = values;
     }
 
@@ -23,19 +22,18 @@ public class StringVector extends ValueVector {
         switch (compareType) {
         case Comparison.EQUAL: {
             if (vv instanceof SingleValueVector) {
-                String[] values1 = this.values;
-                String v = ((SingleValueVector) vv).getValue().getString();
+                Value[] values1 = this.values;
+                Value v = ((SingleValueVector) vv).getValue();
                 boolean[] values = new boolean[values1.length];
                 for (int i = 0; i < values1.length; i++) {
                     values[i] = values1[i].compareTo(v) == 0;
                 }
                 return new BooleanVector(values);
             }
-            String[] values1 = this.values;
-            String[] values2 = ((StringVector) vv).values;
+            Value[] values1 = this.values;
             boolean[] values = new boolean[values1.length];
             for (int i = 0; i < values1.length; i++) {
-                values[i] = values1[i].compareTo(values2[i]) == 0;
+                values[i] = values1[i].compareTo(vv.getValue(i)) == 0;
             }
             return new BooleanVector(values);
         }
@@ -45,8 +43,8 @@ public class StringVector extends ValueVector {
             return null;
         case Comparison.BIGGER: {
             if (vv instanceof SingleValueVector) {
-                String[] values1 = this.values;
-                String v = ((SingleValueVector) vv).getValue().getString();
+                Value[] values1 = this.values;
+                Value v = ((SingleValueVector) vv).getValue();
                 boolean[] values = new boolean[values1.length];
                 for (int i = 0; i < values1.length; i++) {
                     values[i] = values1[i].compareTo(v) > 0;
@@ -69,42 +67,7 @@ public class StringVector extends ValueVector {
     }
 
     @Override
-    public ValueVector add(ValueVector vv) {
-        return null;
-    }
-
-    @Override
-    public ValueVector subtract(ValueVector vv) {
-        return null;
-    }
-
-    @Override
-    public ValueVector multiply(ValueVector vv) {
-        return null;
-    }
-
-    @Override
-    public ValueVector divide(ValueVector vv) {
-        return null;
-    }
-
-    @Override
-    public ValueVector modulus(ValueVector vv) {
-        return null;
-    }
-
-    @Override
-    public int size() {
-        return values.length;
-    }
-
-    @Override
-    public Value getValue(int index) {
-        return ValueString.get(values[index]);
-    }
-
-    @Override
-    public Value[] getValues(ValueVector bvv) {
+    public ValueVector filter(ValueVector bvv) {
         int size;
         if (bvv == null)
             size = values.length;
@@ -114,13 +77,8 @@ public class StringVector extends ValueVector {
         int j = 0;
         for (int i = 0, len = values.length; i < len; i++) {
             if (bvv == null || bvv.isTrue(i))
-                a[j++] = getValue(i);
+                a[j++] = values[i];
         }
-        return a;
-    }
-
-    @Override
-    public Value sum() {
-        return null;
+        return new DefaultValueVector(a);
     }
 }

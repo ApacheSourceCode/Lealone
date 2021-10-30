@@ -13,7 +13,7 @@ import org.lealone.sql.expression.Expression;
 import org.lealone.sql.expression.ValueExpression;
 import org.lealone.sql.expression.evaluator.AlwaysTrueEvaluator;
 import org.lealone.sql.expression.evaluator.ExpressionEvaluator;
-import org.lealone.sql.expression.evaluator.HotSpotEvaluator;
+import org.lealone.sql.expression.evaluator.ExpressionInterpreter;
 import org.lealone.sql.operator.Operator;
 
 // 由子类实现具体的查询操作
@@ -44,8 +44,13 @@ abstract class QOperator implements Operator {
         if (c == null || (c instanceof ValueExpression && c.getValue(session).getBoolean())) {
             conditionEvaluator = new AlwaysTrueEvaluator();
         } else {
-            conditionEvaluator = new HotSpotEvaluator(session, c);
+            conditionEvaluator = createConditionEvaluator(c);
         }
+    }
+
+    // 允许子类覆盖
+    ExpressionEvaluator createConditionEvaluator(Expression c) {
+        return new ExpressionInterpreter(session, c);
     }
 
     boolean yieldIfNeeded(int rowNumber) {

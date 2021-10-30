@@ -15,61 +15,57 @@ import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueNull;
 import org.lealone.sql.operator.Operator;
 import org.lealone.sql.operator.OperatorFactory;
-import org.lealone.sql.operator.OperatorFactoryBase;
 import org.lealone.sql.operator.OperatorFactoryManager;
 
 public class YieldableSelect extends YieldableQueryBase {
 
     private final Select select;
     private final ResultTarget target;
+    private final int olapThreshold;
     private Operator queryOperator;
-    private boolean queryOperatorChanged;
+    private boolean olapDisabled;
 
     public YieldableSelect(Select select, int maxRows, boolean scrollable,
             AsyncHandler<AsyncResult<Result>> asyncHandler, ResultTarget target) {
         super(select, maxRows, scrollable, asyncHandler);
         this.select = select;
         this.target = target;
-    }
-
-    public void setQueryOperator(Operator queryOperator) {
-        this.queryOperator = queryOperator;
+        this.olapThreshold = session.getOlapThreshold();
     }
 
     @Override
     public boolean yieldIfNeeded(int rowNumber) {
-        if (!queryOperatorChanged && rowNumber > 100000) { // TODO 允许配置
-            queryOperatorChanged = true;
-            super.yieldIfNeeded(rowNumber);
-            // createOlapOperatorAync();
-            createOlapOperatorSync();
-            return true;
+        if (!olapDisabled && olapThreshold > 0 && rowNumber > olapThreshold) {
+            olapDisabled = true;
+            boolean yield = super.yieldIfNeeded(rowNumber);
+            Operator olapOperator = createOlapOperator();
+            if (olapOperator != null) {
+                queryOperator = olapOperator;
+                yield = true; // olapOperator创建成功后让出执行权
+            }
+            return yield;
         }
         return super.yieldIfNeeded(rowNumber);
     }
 
-    // private void createOlapOperatorAync() {
-    // Thread t = new Thread(() -> {
-    // createOlapOperator();
-    // });
-    // t.setName("AsyncCreateOlapOperatorThread");
-    // t.start();
-    // }
-
-    private void createOlapOperatorSync() {
-        createOlapOperator();
+    // 一些像QDistinct这样的Operator无需从oltp转到olap，可以禁用olap
+    public void disableOlap() {
+        olapDisabled = true;
     }
 
-    private void createOlapOperator() {
-        OperatorFactory operatorFactory = OperatorFactoryManager.getFactory("olap");
-        if (operatorFactory == null) {
-            operatorFactory = new VOperatorFactory();
+    private Operator createOlapOperator() {
+        Operator olapOperator = null;
+        String olapOperatorFactoryName = session.getOlapOperatorFactoryName();
+        if (olapOperatorFactoryName == null) {
+            olapOperatorFactoryName = "olap";
         }
+        OperatorFactory operatorFactory = OperatorFactoryManager.getFactory(olapOperatorFactoryName);
         if (operatorFactory != null) {
-            Operator olapOperator = operatorFactory.createOperator(select, queryOperator.getLocalResult());
+            olapOperator = operatorFactory.createOperator(select, queryOperator.getLocalResult());
             olapOperator.start();
-            setQueryOperator(olapOperator);
+            olapOperator.copyStatus(queryOperator);
         }
+        return olapOperator;
     }
 
     @Override
@@ -78,7 +74,7 @@ public class YieldableSelect extends YieldableQueryBase {
         select.topTableFilter.startQuery(session);
         select.topTableFilter.reset();
         select.fireBeforeSelectTriggers();
-        queryOperator = new OltpOperatorFactory().createOperator(select);
+        queryOperator = createQueryOperator();
         queryOperator.start();
         return false;
     }
@@ -102,18 +98,6 @@ public class YieldableSelect extends YieldableQueryBase {
                 select.resultCache.setResult(queryOperator.getLocalResult());
                 session.setStatus(SessionStatus.STATEMENT_COMPLETED);
             }
-        }
-    }
-
-    private class OltpOperatorFactory extends OperatorFactoryBase {
-
-        public OltpOperatorFactory() {
-            super("oltp");
-        }
-
-        @Override
-        public Operator createOperator(Select select) {
-            return createQueryOperator();
         }
     }
 

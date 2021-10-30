@@ -13,7 +13,6 @@ import org.lealone.common.exceptions.DbException;
 import org.lealone.common.util.StatementBuilder;
 import org.lealone.common.util.StringUtils;
 import org.lealone.common.util.Utils;
-import org.lealone.db.CommandParameter;
 import org.lealone.db.Constants;
 import org.lealone.db.Database;
 import org.lealone.db.SysProperties;
@@ -23,7 +22,6 @@ import org.lealone.db.async.AsyncHandler;
 import org.lealone.db.async.AsyncResult;
 import org.lealone.db.index.Index;
 import org.lealone.db.index.IndexColumn;
-import org.lealone.db.index.IndexConditionType;
 import org.lealone.db.index.IndexType;
 import org.lealone.db.result.LocalResult;
 import org.lealone.db.result.Result;
@@ -80,7 +78,7 @@ public class Select extends Query {
     int currentGroupRowId;
     Expression condition;
     int visibleColumnCount;
-    int distinctColumnCount;
+    int resultColumnCount; // 不包含having和group by中加入的列
     boolean isGroupQuery;
     boolean isGroupSortedQuery;
     boolean isQuickAggregateQuery;
@@ -204,8 +202,10 @@ public class Select extends Query {
         }
         if (orderList != null) {
             initOrder(session, expressions, expressionSQL, orderList, visibleColumnCount, distinct, filters);
+            // prepare阶段还用到orderList，所以先不置null
         }
-        distinctColumnCount = expressions.size();
+        resultColumnCount = expressions.size();
+
         if (having != null) {
             expressions.add(having);
             havingIndex = expressions.size() - 1;
@@ -213,56 +213,11 @@ public class Select extends Query {
         } else {
             havingIndex = -1;
         }
-
-        // first the select list (visible columns),
-        // then 'ORDER BY' expressions,
-        // then 'HAVING' expressions,
-        // and 'GROUP BY' expressions at the end
         if (group != null) {
-            Database db = session.getDatabase();
-            int size = group.size();
-            int expSize = expressionSQL.size();
-            groupIndex = new int[size];
-            for (int i = 0; i < size; i++) {
-                Expression expr = group.get(i);
-                String sql = expr.getSQL();
-                int found = -1;
-                for (int j = 0; j < expSize; j++) {
-                    String s2 = expressionSQL.get(j);
-                    if (db.equalsIdentifiers(s2, sql)) {
-                        found = j;
-                        break;
-                    }
-                }
-                if (found < 0) {
-                    // special case: GROUP BY a column alias
-                    for (int j = 0; j < expSize; j++) {
-                        Expression e = expressions.get(j);
-                        if (db.equalsIdentifiers(sql, e.getAlias())) {
-                            found = j;
-                            break;
-                        }
-                        sql = expr.getAlias();
-                        if (db.equalsIdentifiers(sql, e.getAlias())) {
-                            found = j;
-                            break;
-                        }
-                    }
-                }
-                if (found < 0) {
-                    int index = expressions.size();
-                    groupIndex[i] = index;
-                    expressions.add(expr);
-                } else {
-                    groupIndex[i] = found;
-                }
-            }
-            groupByExpression = new boolean[expressions.size()];
-            for (int gi : groupIndex) {
-                groupByExpression[gi] = true;
-            }
+            initGroup(expressionSQL);
             group = null;
         }
+
         // map columns in select list and condition
         for (TableFilter f : filters) {
             mapColumns(f, 0);
@@ -324,6 +279,59 @@ public class Select extends Query {
             expressions.add(index++, ec);
         }
         return index;
+    }
+
+    // 为groupIndex和groupByExpression两个字段赋值，
+    // groupIndex记录了GROUP BY子句中的字段在select字段列表中的位置索引(从0开始计数)
+    // groupByExpression数组的大小跟select字段列表一样，类似于一个bitmap，用来记录select字段列表中的哪些字段是GROUP BY字段
+    // 如果GROUP BY子句中的字段不在select字段列表中，那么会把它加到select字段列表
+    private void initGroup(ArrayList<String> expressionSQL) {
+        // first the select list (visible columns),
+        // then 'ORDER BY' expressions,
+        // then 'HAVING' expressions,
+        // and 'GROUP BY' expressions at the end
+        Database db = session.getDatabase();
+        int size = group.size();
+        int expSize = expressionSQL.size();
+        groupIndex = new int[size];
+        for (int i = 0; i < size; i++) {
+            Expression expr = group.get(i);
+            String sql = expr.getSQL();
+            int found = -1;
+            for (int j = 0; j < expSize; j++) {
+                String s2 = expressionSQL.get(j);
+                if (db.equalsIdentifiers(s2, sql)) {
+                    found = j;
+                    break;
+                }
+            }
+            if (found < 0) {
+                // special case: GROUP BY a column alias
+                for (int j = 0; j < expSize; j++) {
+                    Expression e = expressions.get(j);
+                    if (db.equalsIdentifiers(sql, e.getAlias())) {
+                        found = j;
+                        break;
+                    }
+                    sql = expr.getAlias();
+                    if (db.equalsIdentifiers(sql, e.getAlias())) {
+                        found = j;
+                        break;
+                    }
+                }
+            }
+            if (found < 0) {
+                int index = expressions.size();
+                groupIndex[i] = index;
+                expressions.add(expr);
+            } else {
+                groupIndex[i] = found;
+            }
+        }
+        groupByExpression = new boolean[expressions.size()];
+        for (int gi : groupIndex) {
+            groupByExpression[gi] = true;
+        }
     }
 
     @Override
@@ -525,22 +533,18 @@ public class Select extends Query {
                 setEvaluatableRecursive(n);
             }
             Expression on = f.getJoinCondition();
-            if (on != null) {
-                if (!on.isEvaluatable()) {
-                    // need to check that all added are bound to a table
-                    on = on.optimize(session);
-                    if (!f.isJoinOuter() && !f.isJoinOuterIndirect()) {
-                        f.removeJoinCondition();
-                        addCondition(on);
-                    }
+            if (on != null && !on.isEvaluatable()) {
+                // need to check that all added are bound to a table
+                on = on.optimize(session);
+                if (!f.isJoinOuter() && !f.isJoinOuterIndirect()) {
+                    f.removeJoinCondition();
+                    addCondition(on);
                 }
             }
             on = f.getFilterCondition();
-            if (on != null) {
-                if (!on.isEvaluatable()) {
-                    f.removeFilterCondition();
-                    addCondition(on);
-                }
+            if (on != null && !on.isEvaluatable()) {
+                f.removeFilterCondition();
+                addCondition(on);
             }
         }
     }
@@ -901,6 +905,14 @@ public class Select extends Query {
     }
 
     @Override
+    public boolean allowGlobalConditions() {
+        if (offsetExpr == null && (limitExpr == null || sort == null)) {
+            return true;
+        }
+        return false;
+    }
+
+    @Override
     public void addGlobalCondition(Parameter param, int columnId, int comparisonType) {
         addParameter(param);
         Expression comp;
@@ -969,35 +981,8 @@ public class Select extends Query {
         return visitor.visitSelect(this);
     }
 
-    @Override
-    public boolean allowGlobalConditions() {
-        if (offsetExpr == null && (limitExpr == null || sort == null)) {
-            return true;
-        }
-        return false;
-    }
-
     public SortOrder getSortOrder() {
         return sort;
-    }
-
-    @Override
-    public void addGlobalCondition(CommandParameter param, int columnId, int indexConditionType) {
-        int comparisonType = 0;
-        switch (indexConditionType) {
-        case IndexConditionType.EQUALITY:
-            comparisonType = Comparison.EQUAL_NULL_SAFE;
-            break;
-        case IndexConditionType.START:
-            comparisonType = Comparison.BIGGER_EQUAL;
-            break;
-        case IndexConditionType.END:
-            comparisonType = Comparison.SMALLER_EQUAL;
-            break;
-        default:
-            throw DbException.getInternalError("indexConditionType: " + indexConditionType);
-        }
-        this.addGlobalCondition((Parameter) param, columnId, comparisonType);
     }
 
     @Override

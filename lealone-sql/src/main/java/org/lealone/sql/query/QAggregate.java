@@ -15,12 +15,7 @@ class QAggregate extends QOperator {
 
     QAggregate(Select select) {
         super(select);
-    }
-
-    @Override
-    public void start() {
-        super.start();
-        select.currentGroup = new HashMap<Expression, Object>();
+        select.currentGroup = new HashMap<>();
     }
 
     @Override
@@ -43,8 +38,9 @@ class QAggregate extends QOperator {
             if (yield)
                 return;
         }
+        // 最后把聚合后的结果增加到结果集中
         Value[] row = createRow();
-        row = QGroup.keepOnlyDistinct(row, columnCount, select.distinctColumnCount);
+        row = QGroup.toResultRow(row, columnCount, select.resultColumnCount);
         result.addRow(row);
         loopEnd = true;
     }

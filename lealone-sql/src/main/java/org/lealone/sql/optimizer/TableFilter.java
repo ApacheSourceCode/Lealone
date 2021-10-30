@@ -32,10 +32,8 @@ import org.lealone.db.value.ValueNull;
 import org.lealone.sql.IExpression;
 import org.lealone.sql.expression.Expression;
 import org.lealone.sql.expression.condition.Comparison;
+import org.lealone.sql.expression.condition.ConditionAndOr;
 import org.lealone.sql.query.Select;
-import org.lealone.sql.vector.DefaultValueVectorFactory;
-import org.lealone.sql.vector.ValueVector;
-import org.lealone.sql.vector.ValueVectorFactory;
 import org.lealone.storage.PageKey;
 
 /**
@@ -53,7 +51,7 @@ public class TableFilter extends ColumnResolverBase {
     /**
      * Whether this is a direct or indirect (nested) outer join
      */
-    protected boolean joinOuterIndirect;
+    private boolean joinOuterIndirect;
 
     private ServerSession session;
 
@@ -116,8 +114,6 @@ public class TableFilter extends ColumnResolverBase {
 
     private int[] columnIndexes;
 
-    private ValueVectorFactory valueVectorFactory;
-
     /**
      * Create a new table filter object.
      *
@@ -137,17 +133,6 @@ public class TableFilter extends ColumnResolverBase {
             session.getUser().checkRight(table, Right.SELECT);
         }
         hashCode = session.nextObjectId();
-        String valueVectorFactoryName = session.getValueVectorFactoryName();
-        if (valueVectorFactoryName == null) {
-            valueVectorFactory = DefaultValueVectorFactory.INSTANCE;
-        } else {
-            try {
-                valueVectorFactory = (ValueVectorFactory) Class.forName(valueVectorFactoryName).getDeclaredConstructor()
-                        .newInstance();
-            } catch (Exception e) {
-                throw DbException.convert(e);
-            }
-        }
     }
 
     @Override
@@ -245,15 +230,11 @@ public class TableFilter extends ColumnResolverBase {
             return;
         }
         setIndex(item.getIndex());
-        if (nestedJoin != null) {
-            if (item.getNestedJoinPlan() != null) {
-                nestedJoin.setPlanItem(item.getNestedJoinPlan());
-            }
+        if (nestedJoin != null && item.getNestedJoinPlan() != null) {
+            nestedJoin.setPlanItem(item.getNestedJoinPlan());
         }
-        if (join != null) {
-            if (item.getJoinPlan() != null) {
-                join.setPlanItem(item.getJoinPlan());
-            }
+        if (join != null && item.getJoinPlan() != null) {
+            join.setPlanItem(item.getJoinPlan());
         }
     }
 
@@ -429,17 +410,12 @@ public class TableFilter extends ColumnResolverBase {
     /**
      * Set the state of this and all nested tables to the NULL row.
      */
-    protected void setNullRow() {
+    private void setNullRow() {
         state = NULL_ROW;
         current = table.getNullRow();
         currentSearchRow = current;
         if (nestedJoin != null) {
-            nestedJoin.visit(new TableFilterVisitor() {
-                @Override
-                public void accept(TableFilter f) {
-                    f.setNullRow();
-                }
-            });
+            nestedJoin.visit(f -> f.setNullRow());
         }
     }
 
@@ -511,8 +487,7 @@ public class TableFilter extends ColumnResolverBase {
     }
 
     private Expression createCondition(Expression oldC, Expression newC) {
-        return oldC == null ? newC
-                : (Expression) session.getDatabase().getSQLEngine().createConditionAndOr(true, oldC, newC);
+        return oldC == null ? newC : new ConditionAndOr(ConditionAndOr.AND, oldC, newC);
     }
 
     /**
@@ -869,24 +844,14 @@ public class TableFilter extends ColumnResolverBase {
         return getValue(column.getColumnId());
     }
 
-    @Override
-    public ValueVector getValueVector(Column column) {
-        return valueVectorFactory.createValueVector(batch, column);
-    }
+    private int batchSize;
 
-    private ArrayList<Row> batch;
-
-    public boolean nextBatch() {
-        int size = 1024;
-        batch = new ArrayList<>(size);
-        while (size-- > 0 && next()) {
-            batch.add(get());
-        }
-        return !batch.isEmpty();
+    public void setBatchSize(int batchSize) {
+        this.batchSize = batchSize;
     }
 
     public int getBatchSize() {
-        return batch == null ? 0 : batch.size();
+        return batchSize;
     }
 
     public Value getValue(int columnId) {

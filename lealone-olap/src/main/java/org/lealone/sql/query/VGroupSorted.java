@@ -5,27 +5,34 @@
  */
 package org.lealone.sql.query;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 
 import org.lealone.db.value.Value;
+import org.lealone.sql.operator.Operator;
 
 // 只处理group by，且group by的字段有对应的索引
-class QGroupSorted extends QOperator {
+class VGroupSorted extends VOperator {
 
     private Value[] previousKeyValues;
 
-    QGroupSorted(Select select) {
+    VGroupSorted(Select select) {
         super(select);
-        select.currentGroup = null;
     }
 
-    public Value[] getPreviousKeyValues() {
-        return previousKeyValues;
+    @Override
+    public void copyStatus(Operator old) {
+        super.copyStatus(old);
+        if (old instanceof QGroupSorted) {
+            QGroupSorted q = (QGroupSorted) old;
+            previousKeyValues = q.getPreviousKeyValues();
+        }
     }
 
     @Override
     public void run() {
+        batch = new ArrayList<>();
         while (select.topTableFilter.next()) {
             boolean yield = yieldIfNeeded(++loopCount);
             if (conditionEvaluator.getBooleanValue()) {
@@ -37,17 +44,18 @@ class QGroupSorted extends QOperator {
                     previousKeyValues = keyValues;
                     select.currentGroup = new HashMap<>();
                 } else if (!Arrays.equals(previousKeyValues, keyValues)) {
+                    VGroup.updateVectorizedAggregate(select, columnCount, batch);
                     QGroup.addGroupRow(select, previousKeyValues, columnCount, result);
                     previousKeyValues = keyValues;
                     select.currentGroup = new HashMap<>();
                 }
-                select.currentGroupRowId++;
-                QGroup.updateAggregate(select, columnCount);
+                batch.add(select.topTableFilter.get());
                 if (yield)
                     return;
             }
         }
-        if (previousKeyValues != null) {
+        if (previousKeyValues != null && !batch.isEmpty()) {
+            VGroup.updateVectorizedAggregate(select, columnCount, batch);
             QGroup.addGroupRow(select, previousKeyValues, columnCount, result);
         }
         loopEnd = true;
