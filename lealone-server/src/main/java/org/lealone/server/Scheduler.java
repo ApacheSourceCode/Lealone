@@ -5,7 +5,11 @@
  */
 package org.lealone.server;
 
+import java.io.IOException;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.SocketChannel;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ScheduledFuture;
@@ -14,6 +18,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.lealone.common.concurrent.ScheduledExecutors;
+import org.lealone.common.exceptions.DbException;
 import org.lealone.common.logging.Logger;
 import org.lealone.common.logging.LoggerFactory;
 import org.lealone.common.util.DateTimeUtils;
@@ -23,6 +28,9 @@ import org.lealone.db.async.AsyncTaskHandler;
 import org.lealone.db.session.ServerSession;
 import org.lealone.db.session.ServerSession.YieldableCommand;
 import org.lealone.db.session.Session;
+import org.lealone.net.AsyncConnection;
+import org.lealone.net.nio.NioEventLoop;
+import org.lealone.net.nio.NioEventLoopAdapter;
 import org.lealone.sql.PreparedSQLStatement;
 import org.lealone.sql.SQLStatementExecutor;
 import org.lealone.storage.PageOperation;
@@ -30,7 +38,7 @@ import org.lealone.storage.PageOperationHandler;
 import org.lealone.transaction.Transaction;
 
 public class Scheduler extends Thread
-        implements SQLStatementExecutor, PageOperationHandler, AsyncTaskHandler, Transaction.Listener {
+        implements SQLStatementExecutor, PageOperationHandler, AsyncTaskHandler, Transaction.Listener, NioEventLoop {
 
     private static final Logger logger = LoggerFactory.getLogger(Scheduler.class);
 
@@ -56,8 +64,15 @@ public class Scheduler extends Thread
     public Scheduler(int id, Map<String, String> config) {
         super(ScheduleService.class.getSimpleName() + "-" + id);
         setDaemon(true);
-        // 默认100毫秒
-        loopInterval = DateTimeUtils.getLoopInterval(config, "scheduler_loop_interval", 100);
+        // 如果NetServer已经用了EventLoop那就不再用NioEventLoopAdapter
+        boolean useEventLoop = Boolean.parseBoolean(config.get("use_event_loop"));
+        if (!useEventLoop) {
+            initNioEventLoopAdapter(config);
+            loopInterval = 0;
+        } else {
+            // 默认100毫秒
+            loopInterval = DateTimeUtils.getLoopInterval(config, "scheduler_loop_interval", 100);
+        }
     }
 
     void addSessionInfo(SessionInfo si) {
@@ -277,6 +292,9 @@ public class Scheduler extends Thread
     public void wakeUp() {
         if (waiting)
             haveWork.release(1);
+        // if (waiting)
+        if (nioEventLoopAdapter != null)
+            nioEventLoopAdapter.getSelector().wakeup();
     }
 
     @Override
@@ -316,11 +334,6 @@ public class Scheduler extends Thread
                 logger.warn("Failed to run periodic task: " + task + ", task index: " + i, e);
             }
         }
-    }
-
-    private void handleInterruptedException(InterruptedException e) {
-        logger.warn(getName() + " is interrupted");
-        end();
     }
 
     // 以下使用同步方式执行
@@ -373,14 +386,83 @@ public class Scheduler extends Thread
     }
 
     private void doAwait() {
+        if (nioEventLoopAdapter == null) {
+            waiting = true;
+            try {
+                haveWork.tryAcquire(loopInterval, TimeUnit.MILLISECONDS);
+                haveWork.drainPermits();
+            } catch (InterruptedException e) {
+                handleInterruptedException(e);
+            } finally {
+                waiting = false;
+            }
+            return;
+        }
         waiting = true;
         try {
-            haveWork.tryAcquire(loopInterval, TimeUnit.MILLISECONDS);
-            haveWork.drainPermits();
-        } catch (InterruptedException e) {
-            handleInterruptedException(e);
+            nioEventLoopAdapter.select();
+        } catch (IOException e1) {
+            logger.warn("Failed to select", e);
+            return;
+        }
+        waiting = false;
+        Set<SelectionKey> keys = nioEventLoopAdapter.getSelector().selectedKeys();
+        try {
+            for (SelectionKey key : keys) {
+                if (key.isValid()) {
+                    int readyOps = key.readyOps();
+                    if ((readyOps & SelectionKey.OP_READ) != 0) {
+                        nioEventLoopAdapter.read(key, this);
+                    } else if ((readyOps & SelectionKey.OP_WRITE) != 0) {
+                        nioEventLoopAdapter.write(key);
+                    } else {
+                        key.cancel();
+                    }
+                } else {
+                    key.cancel();
+                }
+            }
         } finally {
-            waiting = false;
+            keys.clear();
+        }
+    }
+
+    private void handleInterruptedException(InterruptedException e) {
+        logger.warn(getName() + " is interrupted");
+        end();
+    }
+
+    private NioEventLoopAdapter nioEventLoopAdapter;
+
+    public NioEventLoopAdapter getNioEventLoopAdapter() {
+        return nioEventLoopAdapter;
+    }
+
+    public void register(AsyncConnection conn) {
+        conn.getWritableChannel().setEventLoop(this); // 替换掉原来的
+        nioEventLoopAdapter.register(conn);
+        wakeUp();
+    }
+
+    @Override
+    public NioEventLoop getDefaultNioEventLoopImpl() {
+        return nioEventLoopAdapter;
+    }
+
+    @Override
+    public void handleException(AsyncConnection conn, SocketChannel channel, Exception e) {
+        if (conn != null) {
+            conn.close();
+        }
+        closeChannel(channel);
+    }
+
+    private void initNioEventLoopAdapter(Map<String, String> config) {
+        try {
+            // 默认一直阻塞
+            nioEventLoopAdapter = new NioEventLoopAdapter(config, "scheduler_loop_interval", 0);
+        } catch (IOException e) {
+            throw DbException.convert(e);
         }
     }
 }
