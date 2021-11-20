@@ -23,11 +23,6 @@ public class NioNetServer extends NetServerBase {
     private ServerSocketChannel serverChannel;
 
     @Override
-    public boolean runInMainThread() {
-        return runInMainThread;
-    }
-
-    @Override
     public synchronized void start() {
         if (isStarted())
             return;
@@ -38,12 +33,12 @@ public class NioNetServer extends NetServerBase {
             serverChannel.configureBlocking(true);
             super.start();
             String name = getName() + "Accepter-" + getPort();
-            if (runInMainThread()) {
+            if (isRunInMainThread()) {
                 Thread t = Thread.currentThread();
                 if (t.getName().equals("main"))
                     t.setName(name);
             } else {
-                ConcurrentUtils.submitTask(name, () -> {
+                ConcurrentUtils.submitTask(name, isDaemon(), () -> {
                     NioNetServer.this.run();
                 });
             }
@@ -93,7 +88,10 @@ public class NioNetServer extends NetServerBase {
                 removeConnection(conn);
             }
             closeChannel(channel);
-            logger.warn(getName() + " failed to accept connection", e);
+            // 按Ctrl+C退出时accept可能抛出异常，此时就不需要记录日志了
+            if (!isStopped()) {
+                logger.warn(getName() + " failed to accept connection", e);
+            }
         }
     }
 

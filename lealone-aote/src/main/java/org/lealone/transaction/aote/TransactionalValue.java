@@ -853,6 +853,18 @@ public interface TransactionalValue {
                     if (noUncommitted
                             && !transaction.transactionEngine.containsRepeatableReadTransactions(minVersion)) {
                         committed.setOldValue(null);
+                    } else {
+                        boolean allCommitted = true;
+                        next = committed;
+                        while ((next = next.getOldValue()) != null) {
+                            if (!next.isCommitted()) {
+                                allCommitted = false;
+                                break;
+                            }
+                        }
+                        if (allCommitted) {
+                            committed.setOldValue(null);
+                        }
                     }
                     break;
                 }
@@ -874,6 +886,7 @@ public interface TransactionalValue {
                 TransactionalValue last = first;
                 TransactionalValue next = first.getOldValue();
                 while (next != null) {
+                    // 不能用(next == this)，因为有可能已经被copy一次了
                     if (next.getTid() == tid && next.getLogId() == logId) {
                         next = next.getOldValue();
                         break;
