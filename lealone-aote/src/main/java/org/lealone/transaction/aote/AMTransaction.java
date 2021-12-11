@@ -5,19 +5,21 @@
  */
 package org.lealone.transaction.aote;
 
-import java.nio.ByteBuffer;
 import java.sql.Connection;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.lealone.common.exceptions.DbException;
 import org.lealone.common.util.DataUtils;
+import org.lealone.db.DataBuffer;
 import org.lealone.db.RunMode;
 import org.lealone.db.api.ErrorCode;
 import org.lealone.db.session.Session;
+import org.lealone.db.session.SessionStatus;
 import org.lealone.storage.Storage;
 import org.lealone.storage.StorageMap;
 import org.lealone.storage.replication.ReplicationConflictType;
@@ -27,8 +29,6 @@ import org.lealone.transaction.Transaction;
 import org.lealone.transaction.aote.log.LogSyncService;
 import org.lealone.transaction.aote.log.RedoLogRecord;
 import org.lealone.transaction.aote.log.UndoLog;
-import org.lealone.transaction.aote.tvalue.TransactionalValue;
-import org.lealone.transaction.aote.tvalue.TransactionalValueType;
 
 public class AMTransaction implements Transaction {
 
@@ -58,6 +58,8 @@ public class AMTransaction implements Transaction {
     // 有哪些事务在等待我释放锁
     private final AtomicReference<LinkedList<WaitingTransaction>> waitingTransactionsRef = new AtomicReference<>(
             EMPTY_LINKED_LIST);
+
+    private final ConcurrentHashMap<TransactionalValue, TransactionalValue.LockOwner> tValues = new ConcurrentHashMap<>();
 
     public AMTransaction(AMTransactionEngine engine, long tid) {
         this(engine, tid, null);
@@ -120,10 +122,11 @@ public class AMTransaction implements Transaction {
     @Override
     public void setStatus(int status) {
         this.status = status;
-        if (lockedBy != null && status == STATUS_OPEN) {
-            lockedBy = null;
-            lockStartTime = 0;
-        }
+        // setStatus这个方法会被lockedBy对应的事务调用，所以不能把lockedBy置null，必须由这个被阻塞的事务结束时自己置null
+        // if (lockedBy != null && status == STATUS_OPEN) {
+        // lockedBy = null;
+        // lockStartTime = 0;
+        // }
     }
 
     @Override
@@ -216,7 +219,7 @@ public class AMTransaction implements Transaction {
     }
 
     private RedoLogRecord createLocalTransactionRedoLogRecord() {
-        ByteBuffer operations = undoLog.toRedoLogRecordBuffer(transactionEngine);
+        DataBuffer operations = undoLog.toRedoLogRecordBuffer(transactionEngine);
         if (operations == null || operations.limit() == 0)
             return null;
         return RedoLogRecord.createLocalTransactionRedoLogRecord(transactionId, operations);
@@ -249,8 +252,9 @@ public class AMTransaction implements Transaction {
             } else {
                 // 对于其他日志同步场景，当前线程不需要等待，只需要把事务日志移交到后台日志同步线程的队列中即可
                 // 此时当前线程也不需要自己去做redo log的生成工作，也由后台处理，能尽快结束事务
-                RedoLogRecord r = RedoLogRecord.createLazyTransactionRedoLogRecord(transactionEngine, transactionId,
-                        undoLog);
+                // RedoLogRecord r = RedoLogRecord.createLazyTransactionRedoLogRecord(transactionEngine, transactionId,
+                // undoLog);
+                RedoLogRecord r = createLocalTransactionRedoLogRecord();
                 logSyncService.addRedoLogRecord(r);
                 return true;
             }
@@ -301,8 +305,13 @@ public class AMTransaction implements Transaction {
         AMTransaction t = transactionEngine.removeTransaction(tid);
         if (t == null)
             return;
-        t.undoLog.commit(transactionEngine, tid);
+        // 先提交，事务变成结束状态再解锁
+        UndoLog undoLog = t.undoLog;
+        undoLog.commit(transactionEngine, tid);
         t.endTransaction(false);
+        undoLog.unlock();
+        wakeUpWaitingTransactions();
+        undoLog.gc();
     }
 
     private void endTransaction(boolean remove) {
@@ -311,9 +320,11 @@ public class AMTransaction implements Transaction {
         status = STATUS_CLOSED;
         if (remove)
             transactionEngine.removeTransaction(transactionId);
+    }
 
+    private void wakeUpWaitingTransactions() {
+        LinkedList<WaitingTransaction> waitingTransactions = waitingTransactionsRef.get();
         while (true) {
-            LinkedList<WaitingTransaction> waitingTransactions = waitingTransactionsRef.get();
             if (waitingTransactions != null && waitingTransactions != EMPTY_LINKED_LIST) {
                 for (WaitingTransaction waitingTransaction : waitingTransactions) {
                     waitingTransaction.wakeUp();
@@ -321,6 +332,7 @@ public class AMTransaction implements Transaction {
             }
             if (waitingTransactionsRef.compareAndSet(waitingTransactions, null))
                 break;
+            waitingTransactions = waitingTransactionsRef.get();
         }
         lockedBy = null;
     }
@@ -381,21 +393,27 @@ public class AMTransaction implements Transaction {
     }
 
     int addWaitingTransaction(Object key, AMTransaction transaction, Listener listener) {
+        Session session = transaction.getSession();
+        SessionStatus oldSessionStatus = session.getStatus();
+        session.setStatus(SessionStatus.WAITING);
         transaction.setStatus(STATUS_WAITING);
+        transaction.waitFor(this);
         WaitingTransaction wt = new WaitingTransaction(key, transaction, listener);
+        LinkedList<WaitingTransaction> waitingTransactions = waitingTransactionsRef.get();
         while (true) {
             // 如果已经提交了，通知重试
             if (status == STATUS_CLOSED) {
                 transaction.setStatus(STATUS_OPEN);
+                transaction.waitFor(null);
+                session.setStatus(oldSessionStatus);
                 return OPERATION_NEED_RETRY;
             }
-            LinkedList<WaitingTransaction> waitingTransactions = waitingTransactionsRef.get();
             LinkedList<WaitingTransaction> newWaitingTransactions = new LinkedList<>(waitingTransactions);
             newWaitingTransactions.add(wt);
             if (waitingTransactionsRef.compareAndSet(waitingTransactions, newWaitingTransactions)) {
-                transaction.waitFor(this);
                 return OPERATION_NEED_WAIT;
             }
+            waitingTransactions = waitingTransactionsRef.get();
         }
     }
 
@@ -406,11 +424,15 @@ public class AMTransaction implements Transaction {
 
     @Override
     public void checkTimeout() {
+        if (lockedBy != null)
+            return;
         if (lockedBy != null && lockStartTime != 0
                 && System.currentTimeMillis() - lockStartTime > session.getLockTimeout()) {
             boolean isDeadlock = false;
             WaitingTransaction waitingTransaction = null;
             LinkedList<WaitingTransaction> waitingTransactions = waitingTransactionsRef.get();
+            if (waitingTransactions == null)
+                return;
             for (WaitingTransaction wt : waitingTransactions) {
                 if (wt.getTransaction() == lockedBy) {
                     isDeadlock = true;
@@ -419,6 +441,8 @@ public class AMTransaction implements Transaction {
                 }
             }
             waitingTransactions = lockedBy.waitingTransactionsRef.get();
+            if (waitingTransactions == null)
+                return;
             WaitingTransaction waitingTransaction2 = null;
             for (WaitingTransaction wt : waitingTransactions) {
                 if (wt.getTransaction() == this) {
@@ -449,7 +473,10 @@ public class AMTransaction implements Transaction {
             checkNotClosed();
             rollbackTo(0);
         } finally {
+            UndoLog undoLog = this.undoLog;
             endTransaction(true);
+            undoLog.unlock();
+            wakeUpWaitingTransactions();
         }
     }
 
@@ -508,7 +535,15 @@ public class AMTransaction implements Transaction {
         return buff.toString();
     }
 
-    void logAppend(StorageMap<Object, TransactionalValue> map, Object key, TransactionalValue newValue) {
-        undoLog.add(map.getName(), key, null, newValue);
+    void addTransactionalValue(TransactionalValue tv, TransactionalValue.LockOwner lo) {
+        tValues.put(tv, lo);
+    }
+
+    TransactionalValue.LockOwner removeTransactionalValue(TransactionalValue tv) {
+        return tValues.remove(tv);
+    }
+
+    TransactionalValue.LockOwner getLockOwner(TransactionalValue tv) {
+        return tValues.get(tv);
     }
 }

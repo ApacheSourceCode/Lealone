@@ -23,26 +23,27 @@ import org.lealone.net.NetClientBase;
 import org.lealone.net.NetNode;
 import org.lealone.net.TcpClientConnection;
 
-public class NioNetClient extends NetClientBase implements NioEventLoop {
+class NioEventLoopClient extends NetClientBase {
 
-    private static final Logger logger = LoggerFactory.getLogger(NioNetClient.class);
-    private static final NioNetClient instance = new NioNetClient();
+    private static final Logger logger = LoggerFactory.getLogger(NioEventLoopClient.class);
+    private static final NioEventLoopClient instance = new NioEventLoopClient();
 
-    public static NioNetClient getInstance() {
+    public static NioEventLoopClient getInstance() {
         return instance;
     }
 
-    private NioEventLoopAdapter nioEventLoopAdapter;
+    private NioEventLoop nioEventLoop;
 
-    private NioNetClient() {
+    private NioEventLoopClient() {
     }
 
-    private synchronized void openNioEventLoopAdapter(Map<String, String> config) {
-        if (nioEventLoopAdapter == null) {
+    private synchronized void createNioEventLoop(Map<String, String> config) {
+        if (nioEventLoop == null) {
             try {
-                nioEventLoopAdapter = new NioEventLoopAdapter(config, "client_nio_event_loop_interval", 1000); // 默认1秒
+                nioEventLoop = new NioEventLoop(config, "client_nio_event_loop_interval", 1000); // 默认1秒
+                nioEventLoop.setOwner(this);
                 ConcurrentUtils.submitTask("ClientNioEventLoopService", () -> {
-                    NioNetClient.this.run();
+                    NioEventLoopClient.this.run();
                 });
             } catch (IOException e) {
                 throw new RuntimeException("Failed to open NioEventLoopAdapter", e);
@@ -54,7 +55,7 @@ public class NioNetClient extends NetClientBase implements NioEventLoop {
         long lastTime = System.currentTimeMillis();
         for (;;) {
             try {
-                nioEventLoopAdapter.select();
+                nioEventLoop.select();
                 long currentTime = System.currentTimeMillis();
                 if (currentTime - lastTime > 1000) {
                     lastTime = currentTime;
@@ -62,27 +63,30 @@ public class NioNetClient extends NetClientBase implements NioEventLoop {
                 }
                 if (isClosed())
                     break;
-                Set<SelectionKey> keys = nioEventLoopAdapter.getSelector().selectedKeys();
-                try {
-                    for (SelectionKey key : keys) {
-                        if (key.isValid()) {
-                            int readyOps = key.readyOps();
-                            if ((readyOps & SelectionKey.OP_READ) != 0) {
-                                read(key, this);
-                            } else if ((readyOps & SelectionKey.OP_WRITE) != 0) {
-                                write(key);
-                            } else if ((readyOps & SelectionKey.OP_CONNECT) != 0) {
-                                Object att = key.attachment();
-                                connectionEstablished(key, att);
+                nioEventLoop.write();
+                Set<SelectionKey> keys = nioEventLoop.getSelector().selectedKeys();
+                if (!keys.isEmpty()) {
+                    try {
+                        for (SelectionKey key : keys) {
+                            if (key.isValid()) {
+                                int readyOps = key.readyOps();
+                                if ((readyOps & SelectionKey.OP_READ) != 0) {
+                                    nioEventLoop.read(key);
+                                } else if ((readyOps & SelectionKey.OP_WRITE) != 0) {
+                                    nioEventLoop.write(key);
+                                } else if ((readyOps & SelectionKey.OP_CONNECT) != 0) {
+                                    Object att = key.attachment();
+                                    connectionEstablished(key, att);
+                                } else {
+                                    key.cancel();
+                                }
                             } else {
                                 key.cancel();
                             }
-                        } else {
-                            key.cancel();
                         }
+                    } finally {
+                        keys.clear();
                     }
-                } finally {
-                    keys.clear();
                 }
                 if (isClosed())
                     break;
@@ -101,8 +105,8 @@ public class NioNetClient extends NetClientBase implements NioEventLoop {
         try {
             AsyncConnection conn;
             channel.finishConnect();
-            nioEventLoopAdapter.addSocketChannel(channel);
-            NioWritableChannel writableChannel = new NioWritableChannel(channel, this);
+            nioEventLoop.addSocketChannel(channel);
+            NioWritableChannel writableChannel = new NioWritableChannel(channel, nioEventLoop);
             if (attachment.connectionManager != null) {
                 conn = attachment.connectionManager.createConnection(writableChannel, false);
             } else {
@@ -115,7 +119,7 @@ public class NioNetClient extends NetClientBase implements NioEventLoop {
                 attachment.ac.setAsyncResult(conn2);
             }
             if (conn2 == conn)
-                channel.register(nioEventLoopAdapter.getSelector(), SelectionKey.OP_READ, attachment);
+                channel.register(nioEventLoop.getSelector(), SelectionKey.OP_READ, attachment);
         } catch (Exception e) {
             if (attachment.ac != null) {
                 attachment.ac.setAsyncResult(e);
@@ -132,16 +136,16 @@ public class NioNetClient extends NetClientBase implements NioEventLoop {
 
     @Override
     protected synchronized void openInternal(Map<String, String> config) {
-        if (nioEventLoopAdapter == null) {
-            openNioEventLoopAdapter(config);
+        if (nioEventLoop == null) {
+            createNioEventLoop(config);
         }
     }
 
     @Override
     protected synchronized void closeInternal() {
-        if (nioEventLoopAdapter != null) {
-            nioEventLoopAdapter.close();
-            nioEventLoopAdapter = null;
+        if (nioEventLoop != null) {
+            nioEventLoop.close();
+            nioEventLoop = null;
         }
     }
 
@@ -168,34 +172,11 @@ public class NioNetClient extends NetClientBase implements NioEventLoop {
             attachment.ac = ac;
             attachment.maxSharedSize = maxSharedSize;
 
-            register(channel, SelectionKey.OP_CONNECT, attachment);
+            nioEventLoop.register(channel, SelectionKey.OP_CONNECT, attachment);
             channel.connect(inetSocketAddress);
         } catch (Exception e) {
-            closeChannel(channel);
+            nioEventLoop.closeChannel(channel);
             ac.setAsyncResult(e);
         }
-    }
-
-    @Override
-    public NioEventLoop getDefaultNioEventLoopImpl() {
-        return nioEventLoopAdapter;
-    }
-
-    @Override
-    public void closeChannel(SocketChannel channel) {
-        if (channel == null) {
-            return;
-        }
-        nioEventLoopAdapter.closeChannel(channel);
-    }
-
-    @Override
-    public void handleException(AsyncConnection conn, SocketChannel channel, Exception e) {
-        conn.handleException(e);
-        try {
-            removeConnection(conn);
-        } catch (Exception e1) {
-        }
-        closeChannel(channel);
     }
 }

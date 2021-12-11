@@ -29,7 +29,6 @@ import org.lealone.transaction.TransactionEngineBase;
 import org.lealone.transaction.TransactionMap;
 import org.lealone.transaction.aote.log.LogSyncService;
 import org.lealone.transaction.aote.log.RedoLogRecord;
-import org.lealone.transaction.aote.tvalue.TransactionalValue;
 
 //async multi-version transaction engine
 public class AMTransactionEngine extends TransactionEngineBase implements StorageEventListener {
@@ -52,6 +51,7 @@ public class AMTransactionEngine extends TransactionEngineBase implements Storag
     // key: transactionId
     private final ConcurrentSkipListMap<Long, AMTransaction> currentTransactions = new ConcurrentSkipListMap<>();
     private final AtomicLong lastTransactionId = new AtomicLong();
+    private final ConcurrentHashMap<TransactionalValue, TransactionalValue.OldValue> tValues = new ConcurrentHashMap<>();
 
     private LogSyncService logSyncService;
     private CheckpointService checkpointService;
@@ -120,6 +120,14 @@ public class AMTransactionEngine extends TransactionEngineBase implements Storag
         return false;
     }
 
+    public boolean containsRepeatableReadTransactions() {
+        for (AMTransaction t : currentTransactions.values()) {
+            if (t.getIsolationLevel() >= Transaction.IL_REPEATABLE_READ)
+                return true;
+        }
+        return false;
+    }
+
     ///////////////////// 实现TransactionEngine接口 /////////////////////
 
     @Override
@@ -145,21 +153,19 @@ public class AMTransactionEngine extends TransactionEngineBase implements Storag
     public synchronized void close() {
         if (logSyncService == null)
             return;
-        if (logSyncService != null) {
-            // logSyncService放在最后关闭，这样还能执行一次checkpoint，下次启动时能减少redo操作的次数
-            try {
-                checkpointService.close();
-                checkpointService.join();
-            } catch (Exception e) {
-            }
-            try {
-                logSyncService.close();
-                logSyncService.join();
-            } catch (Exception e) {
-            }
-            this.logSyncService = null;
-            this.checkpointService = null;
+        // logSyncService放在最后关闭，这样还能执行一次checkpoint，下次启动时能减少redo操作的次数
+        try {
+            checkpointService.close();
+            checkpointService.join();
+        } catch (Exception e) {
         }
+        try {
+            logSyncService.close();
+            logSyncService.join();
+        } catch (Exception e) {
+        }
+        this.logSyncService = null;
+        this.checkpointService = null;
     }
 
     @Override
@@ -247,14 +253,14 @@ public class AMTransactionEngine extends TransactionEngineBase implements Storag
     }
 
     @Override
-    public void checkpoint() {
+    public synchronized void checkpoint() {
         checkpointService.checkpoint();
     }
 
     ///////////////////// 实现StorageEventListener接口 /////////////////////
 
     @Override
-    public void beforeClose(Storage storage) {
+    public synchronized void beforeClose(Storage storage) {
         // 事务引擎已经关闭了，此时忽略存储引擎的事件响应
         if (logSyncService == null)
             return;
@@ -262,6 +268,18 @@ public class AMTransactionEngine extends TransactionEngineBase implements Storag
         for (String mapName : storage.getMapNames()) {
             maps.remove(mapName);
         }
+    }
+
+    void addTransactionalValue(TransactionalValue tv, TransactionalValue.OldValue ov) {
+        tValues.put(tv, ov);
+    }
+
+    void removeTransactionalValue(TransactionalValue tv) {
+        tValues.remove(tv);
+    }
+
+    TransactionalValue.OldValue getOldValue(TransactionalValue tv) {
+        return tValues.get(tv);
     }
 
     private class CheckpointService extends Thread {

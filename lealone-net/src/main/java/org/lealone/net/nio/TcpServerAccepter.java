@@ -16,17 +16,18 @@ import org.lealone.common.logging.LoggerFactory;
 import org.lealone.net.AsyncConnection;
 import org.lealone.net.NetServerBase;
 
+//只负责接收新的TCP连接
 //TODO 1.支持SSL 2.支持配置参数
-public class NioNetServer extends NetServerBase {
+class TcpServerAccepter extends NetServerBase {
 
-    private static final Logger logger = LoggerFactory.getLogger(NioNetServer.class);
+    private static final Logger logger = LoggerFactory.getLogger(TcpServerAccepter.class);
     private ServerSocketChannel serverChannel;
 
     @Override
     public synchronized void start() {
         if (isStarted())
             return;
-        logger.info("Starting nio net server");
+        logger.info("Starting tcp server accepter");
         try {
             serverChannel = ServerSocketChannel.open();
             serverChannel.socket().bind(new InetSocketAddress(getHost(), getPort()));
@@ -39,11 +40,11 @@ public class NioNetServer extends NetServerBase {
                     t.setName(name);
             } else {
                 ConcurrentUtils.submitTask(name, isDaemon(), () -> {
-                    NioNetServer.this.run();
+                    TcpServerAccepter.this.run();
                 });
             }
         } catch (Exception e) {
-            checkBindException(e, "Failed to start nio net server");
+            checkBindException(e, "Failed to start tcp server accepter");
         }
     }
 
@@ -51,7 +52,7 @@ public class NioNetServer extends NetServerBase {
     public synchronized void stop() {
         if (isStopped())
             return;
-        logger.info("Stopping nio net server");
+        logger.info("Stopping tcp server accepter");
         super.stop();
         if (serverChannel != null) {
             try {
@@ -65,7 +66,7 @@ public class NioNetServer extends NetServerBase {
     @Override
     public Runnable getRunnable() {
         return () -> {
-            NioNetServer.this.run();
+            TcpServerAccepter.this.run();
         };
     }
 
@@ -82,7 +83,7 @@ public class NioNetServer extends NetServerBase {
             channel = serverChannel.accept();
             channel.configureBlocking(false);
             NioWritableChannel writableChannel = new NioWritableChannel(channel, null);
-            conn = createConnection(writableChannel, true);
+            conn = createConnection(writableChannel);
         } catch (Throwable e) {
             if (conn != null) {
                 removeConnection(conn);

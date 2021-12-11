@@ -3,11 +3,12 @@
  * Licensed under the Server Side Public License, v 1.
  * Initial Developer: zhh
  */
-package org.lealone.transaction.aote.tvalue;
+package org.lealone.transaction.aote;
 
 import java.nio.ByteBuffer;
 
 import org.lealone.db.DataBuffer;
+import org.lealone.db.value.ValueArray;
 import org.lealone.storage.type.StorageDataType;
 
 public class TransactionalValueType implements StorageDataType {
@@ -21,8 +22,7 @@ public class TransactionalValueType implements StorageDataType {
     @Override
     public int getMemory(Object obj) {
         TransactionalValue v = (TransactionalValue) obj;
-        // tid最大8字节
-        return (v.isCommitted() ? 1 : 8) + valueType.getMemory(v.getValue());
+        return 4 + valueType.getMemory(v.getValue());
         // TODO 由于BufferedMap的合并与复制逻辑的验证是并行的，
         // 可能导致split时三个复制节点中某些相同的TransactionalValue有些globalReplicationName为null，有些不为null
         // 这样就会得到不同的内存大小，从而使得splitKey不同
@@ -98,6 +98,11 @@ public class TransactionalValueType implements StorageDataType {
     @Override
     public void setColumns(Object oldObj, Object newObj, int[] columnIndexes) {
         valueType.setColumns(oldObj, newObj, columnIndexes);
+    }
+
+    @Override
+    public ValueArray getColumns(Object obj) {
+        return valueType.getColumns(obj);
     }
 
     @Override
