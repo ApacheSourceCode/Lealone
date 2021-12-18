@@ -59,7 +59,12 @@ public class SetSession extends SetStatement {
             session.setThrottle(getAndValidateIntValue());
             break;
         case TRANSACTION_ISOLATION_LEVEL:
-            session.setTransactionIsolationLevel(getIntValue());
+            if (stringValue != null)
+                session.setTransactionIsolationLevel(stringValue);
+            else
+                session.setTransactionIsolationLevel(getIntValue());
+            // 直接提交事务，开启新事务时用新的隔离级别
+            session.commit();
             break;
         case VALUE_VECTOR_FACTORY_NAME:
             session.setValueVectorFactoryName(getStringValue());

@@ -32,7 +32,8 @@ public class TransactionalValue {
     }
 
     // 对于一个已经提交的值，如果当前事务因为隔离级别的原因读不到这个值，那么就返回SIGHTLESS
-    public static final TransactionalValue SIGHTLESS = createCommitted(null);
+    public static final Object SIGHTLESS = new Object();
+
     private static final AtomicReferenceFieldUpdater<TransactionalValue, AMTransaction> //
     tUpdater = AtomicReferenceFieldUpdater.newUpdater(TransactionalValue.class, AMTransaction.class, "t");
 
@@ -46,6 +47,20 @@ public class TransactionalValue {
     public TransactionalValue(Object value, AMTransaction t) {
         this.value = value;
         this.t = t;
+    }
+
+    private void addLockOwner(AMTransaction t) {
+        LockOwner owner = new LockOwner();
+        owner.logId = t.getUndoLog().getLogId();
+        owner.oldValue = value;
+        t.addTransactionalValue(this, owner);
+    }
+
+    public void setTransaction(AMTransaction t) {
+        if (this.t == null) {
+            addLockOwner(t);
+            this.t = t;
+        }
     }
 
     public void setValue(Object value) {
@@ -67,7 +82,10 @@ public class TransactionalValue {
                     return value;
                 } else {
                     LockOwner owner = t.getLockOwner(this);
-                    return owner == null ? value : owner.oldValue;
+                    if (owner == null)
+                        return SIGHTLESS;
+                    else
+                        return owner.oldValue;
                 }
             }
             return value;
@@ -76,21 +94,27 @@ public class TransactionalValue {
         case Transaction.IL_SERIALIZABLE: {
             long tid = transaction.getTransactionId();
             if (t != null) {
-                if (t.isCommitted() && tid >= t.transactionId)
+                if (t.isCommitted() && tid >= t.commitTimestamp)
                     return value;
             }
             OldValue oldValue = transaction.transactionEngine.getOldValue(this);
+            boolean hasOld = oldValue != null;
             while (oldValue != null) {
                 if (tid >= oldValue.tid)
                     return oldValue.value;
                 oldValue = oldValue.next;
             }
+            if (hasOld) {
+                return SIGHTLESS; // insert成功后的记录，旧事务看不到
+            }
             if (t != null) {
                 LockOwner owner = t.getLockOwner(this);
                 if (owner != null)
                     return owner.oldValue;
+            } else {
+                return value;
             }
-            return SIGHTLESS;
+            return SIGHTLESS; // 刚刚insert但是还没有提交的记录
         }
         case Transaction.IL_READ_UNCOMMITTED: {
             return value;
@@ -126,20 +150,25 @@ public class TransactionalValue {
             return true;
         boolean ok = tUpdater.compareAndSet(this, null, t);
         if (ok) {
-            LockOwner owner = new LockOwner();
-            owner.logId = t.getUndoLog().getLogId();
-            owner.oldValue = value;
-            t.addTransactionalValue(this, owner);
+            addLockOwner(t);
         }
         return ok;
     }
 
     public void unlock() {
         AMTransaction t = this.t;
+        if (t == null)
+            return;
         if (t.transactionEngine.containsRepeatableReadTransactions()) {
             OldValue v = new OldValue();
-            v.value = value;
-            v.tid = t.transactionId;
+            if (value == null) { // 删除操作
+                LockOwner owner = t.getLockOwner(this);
+                v.value = owner.oldValue;
+                v.tid = 0;
+            } else {
+                v.value = value;
+                v.tid = t.commitTimestamp;
+            }
             v.next = t.transactionEngine.getOldValue(this);
             t.transactionEngine.addTransactionalValue(this, v);
         }

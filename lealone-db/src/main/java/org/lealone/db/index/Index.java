@@ -89,14 +89,10 @@ public interface Index extends SchemaObject {
         throw DbException.getUnsupportedException("add row");
     }
 
-    default Future<Integer> update(ServerSession session, Row oldRow, Row newRow, int[] updateColumns) {
-        return update(session, oldRow, newRow, updateColumns, false);
-    }
-
     default Future<Integer> update(ServerSession session, Row oldRow, Row newRow, int[] updateColumns,
             boolean isLockedBySelf) {
         AsyncCallback<Integer> ac = new AsyncCallback<>();
-        remove(session, oldRow).onSuccess(v -> {
+        remove(session, oldRow, isLockedBySelf).onSuccess(v -> {
             add(session, newRow).onComplete(ar -> {
                 ac.setAsyncResult(ar);
             });
@@ -163,15 +159,12 @@ public interface Index extends SchemaObject {
     boolean supportsDistinctQuery();
 
     /**
-     * Find a distinct list of rows and create a cursor to iterate over the
-     * result.
+     * Find a distinct list of rows and create a cursor to iterate over the result.
      *
      * @param session the session
-     * @param first the first row, or null for no limit
-     * @param last the last row, or null for no limit
      * @return the cursor to iterate over the results
      */
-    Cursor findDistinct(ServerSession session, SearchRow first, SearchRow last);
+    Cursor findDistinct(ServerSession session);
 
     /**
      * Can this index iterate over all rows?
