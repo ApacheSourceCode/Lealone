@@ -5,17 +5,12 @@
  */
 package org.lealone.transaction;
 
-public abstract class TransactionEngineBase implements TransactionEngine {
+import org.lealone.db.PluginBase;
 
-    protected final String name;
+public abstract class TransactionEngineBase extends PluginBase implements TransactionEngine {
 
     public TransactionEngineBase(String name) {
-        this.name = name;
-    }
-
-    @Override
-    public String getName() {
-        return name;
+        super(name);
     }
 
     @Override
