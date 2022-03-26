@@ -11,18 +11,12 @@ import org.lealone.test.TestBase;
 import org.lealone.test.misc.CRUDExample;
 
 public class MemoryStorageTest extends TestBase {
-
     @Test
     public void run() throws Exception {
         TestBase test = new TestBase();
         test.setStorageEngineName(MemoryStorageEngine.NAME);
         test.setEmbedded(true);
         test.printURL();
-        TestBase.initTransactionEngine();
-
         CRUDExample.crud(test.getConnection());
-
-        TestBase.closeTransactionEngine();
     }
-
 }

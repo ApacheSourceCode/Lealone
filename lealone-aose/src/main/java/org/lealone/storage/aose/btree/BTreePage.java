@@ -442,7 +442,7 @@ public class BTreePage {
      * @param chunk the chunk
      * @param buff the target buffer
      */
-    void writeUnsavedRecursive(BTreeChunk chunk, DataBuffer buff) {
+    void writeUnsavedRecursive(Chunk chunk, DataBuffer buff) {
         throw ie();
     }
 
@@ -482,6 +482,15 @@ public class BTreePage {
             pos = 0;
         } else {
             map.btreeStorage.setUnsavedChanges(true);
+        }
+    }
+
+    void markDirtyRecursive() {
+        markDirty();
+        PageReference parentRef = getParentRef();
+        while (parentRef != null) {
+            parentRef.page.markDirty();
+            parentRef = parentRef.page.getParentRef();
         }
     }
 
@@ -747,7 +756,7 @@ public class BTreePage {
         return buff;
     }
 
-    void updateChunkAndCachePage(BTreeChunk chunk, int start, int pageLength, int type) {
+    void updateChunkAndCachePage(Chunk chunk, int start, int pageLength, int type) {
         if (pos != 0) {
             throw DataUtils.newIllegalStateException(DataUtils.ERROR_INTERNAL, "Page already stored");
         }
@@ -758,8 +767,8 @@ public class BTreePage {
 
         map.getBTreeStorage().cachePage(pos, this, getMemory());
 
-        if (chunk.sumOfPageLength > BTreeChunk.MAX_SIZE)
+        if (chunk.sumOfPageLength > Chunk.MAX_SIZE)
             throw DataUtils.newIllegalStateException(DataUtils.ERROR_WRITING_FAILED,
-                    "Chunk too large, max size: {0}, current size: {1}", BTreeChunk.MAX_SIZE, chunk.sumOfPageLength);
+                    "Chunk too large, max size: {0}, current size: {1}", Chunk.MAX_SIZE, chunk.sumOfPageLength);
     }
 }
