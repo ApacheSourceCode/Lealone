@@ -16,7 +16,13 @@ import org.lealone.common.exceptions.DbException;
 import org.lealone.common.util.DataUtils;
 import org.lealone.db.DataBuffer;
 import org.lealone.sql.SQLStatementExecutor;
-import org.lealone.storage.aose.btree.PageOperations.CallableOperation;
+import org.lealone.storage.aose.btree.chunk.Chunk;
+import org.lealone.storage.aose.btree.chunk.ChunkCompactor;
+import org.lealone.storage.aose.btree.chunk.ChunkManager;
+import org.lealone.storage.aose.btree.page.Page;
+import org.lealone.storage.aose.btree.page.PageOperations.CallableOperation;
+import org.lealone.storage.aose.btree.page.PageReference;
+import org.lealone.storage.aose.btree.page.PageUtils;
 import org.lealone.storage.cache.CacheLongKeyLIRS;
 import org.lealone.storage.fs.FileStorage;
 import org.lealone.storage.fs.FileUtils;
@@ -26,7 +32,7 @@ import org.lealone.storage.fs.FileUtils;
  */
 public class BTreeStorage {
 
-    private final BTreeMap<Object, Object> map;
+    private final BTreeMap<?, ?> map;
     private final String mapBaseDir;
 
     private final ChunkManager chunkManager;
@@ -40,7 +46,7 @@ public class BTreeStorage {
      * The page cache. The default size is 16 MB, and the average size is 2 KB.
      * It is split in 16 segments. The stack move distance is 2% of the expected number of entries.
      */
-    private final CacheLongKeyLIRS<BTreePage> cache;
+    private final CacheLongKeyLIRS<Page> cache;
 
     /**
      * The compression level for new pages (0 for disabled, 1 for fast, 2 for high).
@@ -59,12 +65,15 @@ public class BTreeStorage {
      * @param map the map to use
      * @throws IllegalStateException if the file is corrupt, or an exception occurred while opening
      */
-    BTreeStorage(BTreeMap<Object, Object> map) {
+    BTreeStorage(BTreeMap<?, ?> map) {
         this.map = map;
         pageSplitSize = getIntValue("pageSplitSize", 16 * 1024);
-        minFillRate = getIntValue("minFillRate", 30);
+        int minFillRate = getIntValue("minFillRate", 30);
+        if (minFillRate > 50) // 超过50没有实际意义
+            minFillRate = 50;
+        this.minFillRate = minFillRate;
         compressionLevel = getIntValue("compress", 0);
-        backgroundExceptionHandler = (UncaughtExceptionHandler) map.config.get("backgroundExceptionHandler");
+        backgroundExceptionHandler = (UncaughtExceptionHandler) map.getConfig("backgroundExceptionHandler");
 
         int mb = getIntValue("cacheSize", 16);
         if (mb > 0) {
@@ -85,16 +94,16 @@ public class BTreeStorage {
     }
 
     private int getIntValue(String key, int defaultValue) {
-        Object value = map.config.get(key);
+        Object value = map.getConfig(key);
         return value != null ? (Integer) value : defaultValue;
     }
 
-    IllegalStateException panic(int errorCode, String message, Object... arguments) {
+    public IllegalStateException panic(int errorCode, String message, Object... arguments) {
         IllegalStateException e = DataUtils.newIllegalStateException(errorCode, message, arguments);
         return panic(e);
     }
 
-    IllegalStateException panic(IllegalStateException e) {
+    public IllegalStateException panic(IllegalStateException e) {
         if (backgroundExceptionHandler != null) {
             backgroundExceptionHandler.uncaughtException(null, e);
         }
@@ -112,7 +121,7 @@ public class BTreeStorage {
      * @param pos the position
      * @return the chunk
      */
-    Chunk getChunk(long pos) {
+    public Chunk getChunk(long pos) {
         return chunkManager.getChunk(pos);
     }
 
@@ -123,7 +132,7 @@ public class BTreeStorage {
      * @param page the page
      * @param memory the memory used
      */
-    void cachePage(long pos, BTreePage page, int memory) {
+    public void cachePage(long pos, Page page, int memory) {
         if (cache != null) {
             cache.put(pos, page, memory);
         }
@@ -135,17 +144,17 @@ public class BTreeStorage {
      * @param pos the page position
      * @return the page
      */
-    BTreePage readPage(long pos) {
+    public Page readPage(long pos) {
         return readPage(null, pos);
     }
 
-    BTreePage readPage(PageReference ref, long pos) {
+    public Page readPage(PageReference ref, long pos) {
         if (pos == 0) {
             throw DataUtils.newIllegalStateException(DataUtils.ERROR_FILE_CORRUPT, "Position 0");
         } else if (ref != null && pos < 0) {
             return ref.readRemotePage(map);
         }
-        return readLocalPageAsync(pos);
+        return readLocalPageSync(pos);
     }
 
     private SQLStatementExecutor getSQLStatementExecutor() {
@@ -156,22 +165,24 @@ public class BTreeStorage {
             return null;
     }
 
-    private BTreePage readLocalPageAsync(final long pos) {
+    // TODO 没什么用，还会产生bug
+    @SuppressWarnings("unused")
+    private Page readLocalPageAsync(final long pos) {
         final SQLStatementExecutor sqlStatementExecutor = getSQLStatementExecutor();
         if (sqlStatementExecutor == null)
             return readLocalPageSync(pos);
-        Callable<BTreePage> task = null;
+        Callable<Page> task = null;
         boolean taskInQueue = false;
         while (true) {
-            BTreePage p = getPageFromCache(pos);
+            Page p = getPageFromCache(pos);
             if (p != null)
                 return p;
 
             if (task == null) {
-                task = new Callable<BTreePage>() {
+                task = new Callable<Page>() {
                     @Override
-                    public BTreePage call() throws Exception {
-                        BTreePage p = readLocalPageSync(pos);
+                    public Page call() throws Exception {
+                        Page p = readLocalPageSync(pos);
                         if (sqlStatementExecutor != null)
                             sqlStatementExecutor.wakeUp();
                         return p;
@@ -181,7 +192,7 @@ public class BTreeStorage {
 
             if (sqlStatementExecutor != null && (Thread.currentThread() == sqlStatementExecutor)) {
                 if (!taskInQueue) {
-                    map.pohFactory.addPageOperation(new CallableOperation(task));
+                    map.getPohFactory().addPageOperation(new CallableOperation(task));
                     taskInQueue = true;
                 }
                 sqlStatementExecutor.executeNextStatement();
@@ -196,18 +207,18 @@ public class BTreeStorage {
         }
     }
 
-    private BTreePage getPageFromCache(long pos) {
+    private Page getPageFromCache(long pos) {
         return cache == null ? null : cache.get(pos);
     }
 
-    private BTreePage readLocalPageSync(long pos) {
-        BTreePage p = getPageFromCache(pos);
+    private Page readLocalPageSync(long pos) {
+        Page p = getPageFromCache(pos);
         if (p != null)
             return p;
         Chunk c = getChunk(pos);
         long filePos = Chunk.getFilePos(PageUtils.getPageOffset(pos));
         int pageLength = c.getPageLength(pos);
-        p = BTreePage.read(map, c.fileStorage, pos, filePos, pageLength);
+        p = Page.read(map, c.fileStorage, pos, filePos, pageLength);
         cachePage(pos, p, p.getMemory());
         return p;
     }
@@ -218,7 +229,7 @@ public class BTreeStorage {
      * @param pos the position of the page
      * @param memory the memory usage
      */
-    void removePage(long pos, int memory) {
+    public void removePage(long pos, int memory) {
         hasUnsavedChanges = true;
 
         // we need to keep temporary pages
@@ -236,18 +247,18 @@ public class BTreeStorage {
         }
     }
 
-    int getCompressionLevel() {
+    public int getCompressionLevel() {
         return compressionLevel;
     }
 
-    Compressor getCompressorFast() {
+    public Compressor getCompressorFast() {
         if (compressorFast == null) {
             compressorFast = new CompressLZF();
         }
         return compressorFast;
     }
 
-    Compressor getCompressorHigh() {
+    public Compressor getCompressorHigh() {
         if (compressorHigh == null) {
             compressorHigh = new CompressDeflate();
         }
@@ -346,7 +357,7 @@ public class BTreeStorage {
         }
     }
 
-    void setUnsavedChanges(boolean b) {
+    public void setUnsavedChanges(boolean b) {
         hasUnsavedChanges = b;
     }
 
@@ -390,14 +401,14 @@ public class BTreeStorage {
         executeSave(true);
     }
 
-    synchronized void executeSave(boolean force) {
+    public synchronized void executeSave(boolean force) {
         DataBuffer chunkBody = DataBuffer.create();
         try {
             Chunk c = chunkManager.createChunk();
             c.fileStorage = getFileStorage(c.fileName);
             c.mapSize = map.size();
 
-            BTreePage p = map.root;
+            Page p = map.getRootPage();
             // 如果不写，rootPagePos会是0，重新打开时会报错
             // if (p.getTotalCount() > 0 || force) {
             p.writeUnsavedRecursive(c, chunkBody);
@@ -416,7 +427,7 @@ public class BTreeStorage {
         }
     }
 
-    FileStorage getFileStorage(int chunkId) {
+    public FileStorage getFileStorage(int chunkId) {
         String chunkFileName = mapBaseDir + File.separator + chunkManager.getChunkFileName(chunkId);
         return openFileStorage(chunkFileName);
     }
@@ -428,7 +439,7 @@ public class BTreeStorage {
 
     private FileStorage openFileStorage(String chunkFileName) {
         FileStorage fileStorage = new FileStorage();
-        fileStorage.open(chunkFileName, map.config);
+        fileStorage.open(chunkFileName, map.getConfig());
         return fileStorage;
     }
 }
