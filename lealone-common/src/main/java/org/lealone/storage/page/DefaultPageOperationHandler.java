@@ -6,10 +6,8 @@
 package org.lealone.storage.page;
 
 import java.util.Map;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 
 import org.lealone.common.logging.Logger;
 import org.lealone.common.logging.LoggerFactory;
@@ -17,115 +15,64 @@ import org.lealone.common.util.DateTimeUtils;
 import org.lealone.common.util.ShutdownHookUtils;
 import org.lealone.db.async.AsyncResult;
 
-public class DefaultPageOperationHandler implements PageOperationHandler, Runnable, PageOperation.Listener<Object> {
+public class DefaultPageOperationHandler extends PageOperationHandlerBase
+        implements Runnable, PageOperation.Listener<Object> {
 
     private static final Logger logger = LoggerFactory.getLogger(DefaultPageOperationHandler.class);
-    // LinkedBlockingQueue测出的性能不如ConcurrentLinkedQueue好
-    private final ConcurrentLinkedQueue<PageOperation> tasks = new ConcurrentLinkedQueue<>();
-    private final AtomicLong size = new AtomicLong();
     private final Semaphore haveWork = new Semaphore(1);
-    private final String name;
     private final long loopInterval;
-    private Thread thread;
     private boolean stopped;
-    private long shiftCount;
+    private volatile boolean waiting;
 
-    public DefaultPageOperationHandler(int id, Map<String, String> config) {
-        this(DefaultPageOperationHandler.class.getSimpleName() + "-" + id, config);
-    }
-
-    public DefaultPageOperationHandler(String name, Map<String, String> config) {
-        this.name = name;
+    public DefaultPageOperationHandler(int id, int waitingQueueSize, Map<String, String> config) {
+        super(id, DefaultPageOperationHandler.class.getSimpleName() + "-" + id, waitingQueueSize);
         // 默认100毫秒
         loopInterval = DateTimeUtils.getLoopInterval(config, "page_operation_handler_loop_interval", 100);
     }
 
     @Override
-    public long getLoad() {
-        return size.get();
+    protected Logger getLogger() {
+        return logger;
     }
 
-    @Override
-    public void handlePageOperation(PageOperation task) {
-        size.incrementAndGet();
-        tasks.add(task);
-        wakeUp();
-    }
-
-    @Override
-    public String toString() {
-        return name;
-    }
-
-    public String getName() {
-        return name;
-    }
-
-    public void reset(boolean clearTasks) {
-        thread = null;
-        stopped = false;
-        shiftCount = 0;
-        if (clearTasks) {
-            size.set(0);
-            tasks.clear();
-        }
-    }
-
-    public void start() {
-        if (thread != null)
+    public void startHandler() {
+        if (stopped)
             return;
         stopped = false;
-        ShutdownHookUtils.addShutdownHook(name, () -> {
-            stop();
+        ShutdownHookUtils.addShutdownHook(getName(), () -> {
+            stopHandler();
         });
-        thread = new Thread(this, name);
-        thread.setDaemon(true);
-        thread.start();
+        start();
     }
 
-    public void stop() {
+    public void stopHandler() {
         stopped = true;
-        thread = null;
         wakeUp();
     }
 
+    @Override
     public void wakeUp() {
-        haveWork.release(1);
-    }
-
-    public long getShiftCount() {
-        return shiftCount;
+        if (waiting)
+            haveWork.release(1);
     }
 
     @Override
     public void run() {
         while (!stopped) {
-            runTasks();
-            try {
-                haveWork.tryAcquire(loopInterval, TimeUnit.MILLISECONDS);
-                haveWork.drainPermits();
-            } catch (InterruptedException e) {
-                stopped = true;
-                // logger.warn(getName() + " is interrupted");
-                break;
-            }
+            runPageOperationTasks();
+            doAwait();
         }
     }
 
-    private void runTasks() {
-        PageOperation task = tasks.poll();
-        while (task != null) {
-            size.decrementAndGet();
-            try {
-                task.run(this);
-                // PageOperationResult result = task.run(this);
-                // if (result == PageOperationResult.SHIFTED) {
-                // shiftCount++;
-                // }
-            } catch (Throwable e) {
-                logger.warn("Failed to run page operation: " + task, e);
-            }
-            task = tasks.poll();
+    private void doAwait() {
+        waiting = true;
+        try {
+            haveWork.tryAcquire(loopInterval, TimeUnit.MILLISECONDS);
+            haveWork.drainPermits();
+        } catch (InterruptedException e) {
+            logger.warn("", e);
+        } finally {
+            waiting = false;
         }
     }
 
@@ -138,13 +85,8 @@ public class DefaultPageOperationHandler implements PageOperationHandler, Runnab
         e = null;
         result = null;
         while (result == null || e == null) {
-            runTasks();
-            try {
-                haveWork.tryAcquire(loopInterval, TimeUnit.MILLISECONDS);
-                haveWork.drainPermits();
-            } catch (InterruptedException e) {
-                break;
-            }
+            runPageOperationTasks();
+            doAwait();
         }
         if (e != null)
             throw e;

@@ -19,9 +19,8 @@ import org.lealone.storage.LobStorage;
 import org.lealone.storage.aose.AOStorage;
 import org.lealone.storage.aose.lob.LobStreamStorage;
 import org.lealone.storage.fs.FileStorage;
-import org.lealone.test.TestBase;
 
-public class LobStorageTest extends TestBase {
+public class LobStorageTest extends AoseTestBase {
     @Test
     public void run() throws Exception {
         AOStorage storage = AOStorageTest.openStorage();
@@ -31,6 +30,7 @@ public class LobStorageTest extends TestBase {
         int length = in.available();
         LobStreamStorage lobStorage = new LobStreamStorage(new DataHandlerMock(), storage);
         lobStorage.init();
+        lobStorage.getLobStreamMap().setMaxBlockSize(512); // 设置小一点可以测试LobStreamMap中的indirect块
 
         ValueLob lob = lobStorage.createBlob(in, -1);
         assertEquals(1, lob.getLobId());
@@ -41,8 +41,8 @@ public class LobStorageTest extends TestBase {
         assertEquals(length, bytes.length);
 
         String clobStr = "clob-test";
-        StringBuilder buff = new StringBuilder(1000 * clobStr.length());
-        for (int i = 0; i < 1000; i++)
+        StringBuilder buff = new StringBuilder(10000 * clobStr.length());
+        for (int i = 0; i < 10000; i++)
             buff.append(clobStr);
 
         clobStr = buff.toString();

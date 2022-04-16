@@ -7,20 +7,16 @@ package org.lealone.storage.aose.btree;
 
 import java.io.File;
 import java.lang.Thread.UncaughtExceptionHandler;
-import java.util.concurrent.Callable;
 
 import org.lealone.common.compress.CompressDeflate;
 import org.lealone.common.compress.CompressLZF;
 import org.lealone.common.compress.Compressor;
-import org.lealone.common.exceptions.DbException;
 import org.lealone.common.util.DataUtils;
 import org.lealone.db.DataBuffer;
-import org.lealone.sql.SQLStatementExecutor;
 import org.lealone.storage.aose.btree.chunk.Chunk;
 import org.lealone.storage.aose.btree.chunk.ChunkCompactor;
 import org.lealone.storage.aose.btree.chunk.ChunkManager;
 import org.lealone.storage.aose.btree.page.Page;
-import org.lealone.storage.aose.btree.page.PageOperations.CallableOperation;
 import org.lealone.storage.aose.btree.page.PageReference;
 import org.lealone.storage.aose.btree.page.PageUtils;
 import org.lealone.storage.cache.CacheLongKeyLIRS;
@@ -75,16 +71,22 @@ public class BTreeStorage {
         compressionLevel = getIntValue("compress", 0);
         backgroundExceptionHandler = (UncaughtExceptionHandler) map.getConfig("backgroundExceptionHandler");
 
-        int mb = getIntValue("cacheSize", 16);
-        if (mb > 0) {
-            CacheLongKeyLIRS.Config cc = new CacheLongKeyLIRS.Config();
-            cc.maxMemory = mb * 1024L * 1024L;
-            cache = new CacheLongKeyLIRS<>(cc);
+        chunkManager = new ChunkManager(this);
+        if (map.isInMemory()) {
+            cache = null;
+            mapBaseDir = null;
+            return;
         } else {
-            cache = null; // 当 cacheSize <= 0 时禁用缓存
+            int mb = getIntValue("cacheSize", 16);
+            if (mb > 0) {
+                CacheLongKeyLIRS.Config cc = new CacheLongKeyLIRS.Config();
+                cc.maxMemory = mb * 1024L * 1024L;
+                cache = new CacheLongKeyLIRS<>(cc);
+            } else {
+                cache = null; // 当 cacheSize <= 0 时禁用缓存
+            }
         }
 
-        chunkManager = new ChunkManager(this);
         mapBaseDir = map.getStorage().getStoragePath() + File.separator + map.getName();
         if (!FileUtils.exists(mapBaseDir))
             FileUtils.createDirectories(mapBaseDir);
@@ -154,64 +156,14 @@ public class BTreeStorage {
         } else if (ref != null && pos < 0) {
             return ref.readRemotePage(map);
         }
-        return readLocalPageSync(pos);
-    }
-
-    private SQLStatementExecutor getSQLStatementExecutor() {
-        Thread t = Thread.currentThread();
-        if (t instanceof SQLStatementExecutor)
-            return (SQLStatementExecutor) t;
-        else
-            return null;
-    }
-
-    // TODO 没什么用，还会产生bug
-    @SuppressWarnings("unused")
-    private Page readLocalPageAsync(final long pos) {
-        final SQLStatementExecutor sqlStatementExecutor = getSQLStatementExecutor();
-        if (sqlStatementExecutor == null)
-            return readLocalPageSync(pos);
-        Callable<Page> task = null;
-        boolean taskInQueue = false;
-        while (true) {
-            Page p = getPageFromCache(pos);
-            if (p != null)
-                return p;
-
-            if (task == null) {
-                task = new Callable<Page>() {
-                    @Override
-                    public Page call() throws Exception {
-                        Page p = readLocalPageSync(pos);
-                        if (sqlStatementExecutor != null)
-                            sqlStatementExecutor.wakeUp();
-                        return p;
-                    }
-                };
-            }
-
-            if (sqlStatementExecutor != null && (Thread.currentThread() == sqlStatementExecutor)) {
-                if (!taskInQueue) {
-                    map.getPohFactory().addPageOperation(new CallableOperation(task));
-                    taskInQueue = true;
-                }
-                sqlStatementExecutor.executeNextStatement();
-                continue;
-            } else {
-                try {
-                    return task.call();
-                } catch (Exception e) {
-                    throw DbException.convert(e);
-                }
-            }
-        }
+        return readLocalPage(pos);
     }
 
     private Page getPageFromCache(long pos) {
         return cache == null ? null : cache.get(pos);
     }
 
-    private Page readLocalPageSync(long pos) {
+    private Page readLocalPage(long pos) {
         Page p = getPageFromCache(pos);
         if (p != null)
             return p;
@@ -313,6 +265,8 @@ public class BTreeStorage {
      */
     synchronized void remove() {
         closeImmediately();
+        if (map.isInMemory())
+            return;
         FileUtils.deleteRecursive(mapBaseDir, true);
     }
 
@@ -380,6 +334,9 @@ public class BTreeStorage {
         if (closed) {
             return;
         }
+        if (map.isInMemory()) {
+            return;
+        }
         if (map.isReadOnly()) {
             throw DataUtils.newIllegalStateException(DataUtils.ERROR_WRITING_FAILED, "This storage is read-only");
         }
@@ -402,6 +359,9 @@ public class BTreeStorage {
     }
 
     public synchronized void executeSave(boolean force) {
+        if (map.isInMemory()) {
+            return;
+        }
         DataBuffer chunkBody = DataBuffer.create();
         try {
             Chunk c = chunkManager.createChunk();

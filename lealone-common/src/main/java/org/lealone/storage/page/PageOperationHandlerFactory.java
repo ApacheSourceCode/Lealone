@@ -5,22 +5,16 @@
  */
 package org.lealone.storage.page;
 
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public abstract class PageOperationHandlerFactory {
 
-    protected final DefaultPageOperationHandler nodePageOperationHandler;
     protected PageOperationHandler[] pageOperationHandlers;
 
     protected PageOperationHandlerFactory(Map<String, String> config, PageOperationHandler[] handlers) {
-        nodePageOperationHandler = new DefaultPageOperationHandler("NodePageOperationHandler", config);
-        nodePageOperationHandler.start();
         if (handlers != null) {
             setPageOperationHandlers(handlers);
             return;
@@ -36,34 +30,41 @@ public abstract class PageOperationHandlerFactory {
 
         pageOperationHandlers = new PageOperationHandler[handlerCount];
         for (int i = 0; i < handlerCount; i++) {
-            pageOperationHandlers[i] = new DefaultPageOperationHandler("LeafPageOperationHandler-" + i, config);
+            pageOperationHandlers[i] = new DefaultPageOperationHandler(i, handlerCount, config);
         }
         startHandlers();
     }
 
-    public PageOperationHandler getNodePageOperationHandler() {
-        return nodePageOperationHandler;
-    }
-
-    public List<PageOperationHandler> getAllPageOperationHandlers() {
-        ArrayList<PageOperationHandler> list = new ArrayList<>(1 + pageOperationHandlers.length);
-        list.add(nodePageOperationHandler);
-        list.addAll(Arrays.asList(pageOperationHandlers));
-        return list;
-    }
-
     public abstract PageOperationHandler getPageOperationHandler();
+
+    public PageOperationHandler[] getPageOperationHandlers() {
+        return pageOperationHandlers;
+    }
 
     public void setPageOperationHandlers(PageOperationHandler[] handlers) {
         pageOperationHandlers = new PageOperationHandler[handlers.length];
         System.arraycopy(handlers, 0, pageOperationHandlers, 0, handlers.length);
     }
 
+    public void startHandlers() {
+        for (PageOperationHandler h : pageOperationHandlers) {
+            if (h instanceof DefaultPageOperationHandler) {
+                ((DefaultPageOperationHandler) h).startHandler();
+            }
+        }
+    }
+
+    public void stopHandlers() {
+        for (PageOperationHandler h : pageOperationHandlers) {
+            if (h instanceof DefaultPageOperationHandler) {
+                ((DefaultPageOperationHandler) h).stopHandler();
+            }
+        }
+    }
+
     public void addPageOperation(PageOperation po) {
         Object t = Thread.currentThread();
-        // 如果当前线程本身就是PageOperationHandler，就算PageOperation想要操作的page不是它管辖范围内的，
-        // 也可以提前帮此page的PageOperationHandler找到这个即将被操作的page，
-        // 然后把PageOperation移交到对应的PageOperationHandler的队列中，下次处理时就不用重新再遍历btree了。
+        // 如果当前线程本身就是PageOperationHandler，直接运行。
         if (t instanceof PageOperationHandler) {
             po.run((PageOperationHandler) t);
         } else {
@@ -73,38 +74,12 @@ public abstract class PageOperationHandlerFactory {
         }
     }
 
-    public int getPageOperationHandlerCount() {
-        return pageOperationHandlers.length;
-    }
-
-    public void startHandlers() {
-        nodePageOperationHandler.start();
-        for (PageOperationHandler h : pageOperationHandlers) {
-            if (h instanceof DefaultPageOperationHandler) {
-                ((DefaultPageOperationHandler) h).start();
-            }
-        }
-    }
-
-    public void stopHandlers() {
-        nodePageOperationHandler.stop();
-        for (PageOperationHandler h : pageOperationHandlers) {
-            if (h instanceof DefaultPageOperationHandler) {
-                ((DefaultPageOperationHandler) h).stop();
-            }
-        }
-    }
-
-    public static PageOperationHandlerFactory instance;
-
     public static PageOperationHandlerFactory create(Map<String, String> config) {
         return create(config, null);
     }
 
     public static synchronized PageOperationHandlerFactory create(Map<String, String> config,
             PageOperationHandler[] handlers) {
-        if (instance != null)
-            return instance;
         if (config == null)
             config = new HashMap<>(0);
         PageOperationHandlerFactory factory = null;
@@ -121,7 +96,6 @@ public abstract class PageOperationHandlerFactory {
         else {
             throw new RuntimeException("Unknow " + key + ": " + type);
         }
-        PageOperationHandlerFactory.instance = factory;
         return factory;
     }
 

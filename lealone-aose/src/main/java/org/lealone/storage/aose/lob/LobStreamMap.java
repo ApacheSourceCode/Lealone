@@ -15,7 +15,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.lealone.common.util.DataUtils;
-import org.lealone.storage.StorageMap;
+import org.lealone.storage.aose.btree.BTreeMap;
 
 /**
  * A facility to store streams in a map. Streams are split into blocks, which
@@ -47,7 +47,7 @@ public class LobStreamMap {
      * Key: stream store block id (long).
      * Value: data (byte[]).
      */
-    private final StorageMap<Long, byte[]> map;
+    private final BTreeMap<Long, byte[]> map;
     private final AtomicLong nextKey = new AtomicLong();
     private final AtomicReference<byte[]> nextBuffer = new AtomicReference<>();
 
@@ -59,12 +59,8 @@ public class LobStreamMap {
      *
      * @param map the map to store blocks of data
      */
-    public LobStreamMap(StorageMap<Long, byte[]> map) {
+    public LobStreamMap(BTreeMap<Long, byte[]> map) {
         this.map = map;
-    }
-
-    public StorageMap<Long, byte[]> getStorageMap() {
-        return map;
     }
 
     public boolean isEmpty() {

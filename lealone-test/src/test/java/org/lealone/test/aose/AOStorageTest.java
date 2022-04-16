@@ -10,12 +10,8 @@ import org.lealone.storage.aose.AOStorage;
 import org.lealone.storage.aose.AOStorageBuilder;
 import org.lealone.storage.aose.btree.BTreeMap;
 import org.lealone.storage.fs.FilePath;
-import org.lealone.test.TestBase;
 
-public class AOStorageTest extends TestBase {
-
-    private AOStorage storage;
-
+public class AOStorageTest extends AoseTestBase {
     @Test
     public void run() {
         init();
@@ -28,7 +24,8 @@ public class AOStorageTest extends TestBase {
         }
     }
 
-    private void init() {
+    @Override
+    protected void init() {
         AOStorageBuilder builder = new AOStorageBuilder();
         builder.pageSplitSize(1024);
         builder.encryptionKey("mykey".toCharArray());
@@ -109,7 +106,7 @@ public class AOStorageTest extends TestBase {
         if (storagePath == null)
             storagePath = joinDirs("aose");
         builder.compressHigh();
-        builder.storagePath(storagePath).reuseSpace().minFillRate(30);
+        builder.storagePath(storagePath).minFillRate(30);
         AOStorage storage = builder.openStorage();
         return storage;
     }

@@ -30,7 +30,7 @@ import org.lealone.db.session.Session;
 import org.lealone.db.value.ValueLong;
 import org.lealone.db.value.ValueNull;
 import org.lealone.net.NetNode;
-import org.lealone.storage.IterationParameters;
+import org.lealone.storage.CursorParameters;
 import org.lealone.storage.StorageCommand;
 import org.lealone.storage.StorageMapBase;
 import org.lealone.storage.StorageMapCursor;
@@ -40,18 +40,19 @@ import org.lealone.storage.aose.btree.page.LeafPage;
 import org.lealone.storage.aose.btree.page.Page;
 import org.lealone.storage.aose.btree.page.PageKeyCursor;
 import org.lealone.storage.aose.btree.page.PageOperations.Append;
-import org.lealone.storage.aose.btree.page.PageOperations.Get;
 import org.lealone.storage.aose.btree.page.PageOperations.Put;
 import org.lealone.storage.aose.btree.page.PageOperations.PutIfAbsent;
 import org.lealone.storage.aose.btree.page.PageOperations.Remove;
 import org.lealone.storage.aose.btree.page.PageOperations.Replace;
 import org.lealone.storage.aose.btree.page.PageOperations.RunnableOperation;
+import org.lealone.storage.aose.btree.page.PageOperations.SingleWrite;
 import org.lealone.storage.aose.btree.page.PageReference;
 import org.lealone.storage.aose.btree.page.PageStorageMode;
 import org.lealone.storage.aose.btree.page.RemotePage;
 import org.lealone.storage.page.LeafPageMovePlan;
 import org.lealone.storage.page.PageKey;
 import org.lealone.storage.page.PageOperation;
+import org.lealone.storage.page.PageOperation.PageOperationResult;
 import org.lealone.storage.page.PageOperationHandler;
 import org.lealone.storage.page.PageOperationHandlerFactory;
 import org.lealone.storage.type.StorageDataType;
@@ -71,31 +72,37 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
 
     // 只允许通过成员方法访问这个特殊的字段
     private final AtomicLong size = new AtomicLong(0);
+    private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
     private final boolean readOnly;
+    private final boolean inMemory;
     private final Map<String, Object> config;
     private final BTreeStorage btreeStorage;
     private final PageOperationHandlerFactory pohFactory;
-    // 每个btree固定一个处理器用于处理node page的所有状态更新操作
-    private final PageOperationHandler nodePageOperationHandler;
     private PageStorageMode pageStorageMode = PageStorageMode.ROW_STORAGE;
 
-    private final PageReference rootRef = new PageReference(null);
+    private class RootPageReference extends PageReference {
+        @Override
+        public void replacePage(Page page) {
+            super.replacePage(page);
+            setRootRef(page); // 当要替换page时也设置root page相关信息
+        }
+    }
+
+    private final RootPageReference rootRef = new RootPageReference();
     // btree的root page，最开始是一个leaf page，随时都会指向新的page
-    private volatile Page root;
-    private volatile boolean parallelDisabled;
+    private Page root;
 
-    private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
-
-    protected BTreeMap(String name, StorageDataType keyType, StorageDataType valueType, Map<String, Object> config,
+    public BTreeMap(String name, StorageDataType keyType, StorageDataType valueType, Map<String, Object> config,
             AOStorage aoStorage) {
         super(name, keyType, valueType, aoStorage);
         DataUtils.checkNotNull(config, "config");
+        // 只要包含就为true
+        readOnly = config.containsKey("readOnly");
+        inMemory = config.containsKey("inMemory");
 
-        this.readOnly = config.containsKey("readOnly");
         this.config = config;
-        this.pohFactory = aoStorage.getPageOperationHandlerFactory();
-        this.nodePageOperationHandler = pohFactory.getNodePageOperationHandler();
+        this.pohFactory = (PageOperationHandlerFactory) config.get("pohFactory");
         Object mode = config.get("pageStorageMode");
         if (mode != null) {
             pageStorageMode = PageStorageMode.valueOf(mode.toString());
@@ -109,9 +116,10 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
         btreeStorage = new BTreeStorage(this);
         Chunk lastChunk = btreeStorage.getLastChunk();
         if (lastChunk != null) {
-            root = btreeStorage.readPage(lastChunk.rootPagePos);
             size.set(lastChunk.mapSize);
-            setRootRef(); // 提前设置，如果root page是node类型，子page就能在Page.getChildPage中找到ParentRef
+            Page root = btreeStorage.readPage(lastChunk.rootPagePos);
+            // 提前设置，如果root page是node类型，子page就能在Page.getChildPage中找到ParentRef
+            setRootRef(root);
             setMaxKey(lastKey());
         } else {
             if (isShardingMode) {
@@ -129,54 +137,58 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
             } else {
                 root = LeafPage.createEmpty(this);
             }
-            setRootRef();
-        }
-        disableParallelIfNeeded();
-    }
-
-    private void setRootRef() {
-        if (root.isNode() && root.getRef() == null) {
-            root.setRef(rootRef);
-            rootRef.replacePage(root);
+            setRootRef(root);
         }
     }
 
     private boolean containsLocalNode(String[] replicationNodes) {
-        for (String e : replicationNodes) {
-            if (NetNode.isLocalTcpNode(e))
+        for (String n : replicationNodes) {
+            if (NetNode.isLocalTcpNode(n))
                 return true;
         }
         return false;
     }
 
-    private void disableParallelIfNeeded() {
-        if (root.isLeaf())
-            parallelDisabled = true;
-    }
-
-    public void enableParallelIfNeeded() {
-        if (parallelDisabled && root.isNode() && root.getRawChildPageCount() >= 2) {
-            parallelDisabled = false;
+    private void setRootRef(Page root) {
+        if (this.root != root) {
+            this.root = root;
+        }
+        if (rootRef.getPage() != root) {
+            if (root.getRef() != rootRef) {
+                root.setRef(rootRef);
+                rootRef.replacePage(root);
+            }
+            if (root.isNode()) {
+                for (PageReference ref : root.getChildren()) {
+                    Page p = ref.getPage();
+                    if (p != null && p.getParentRef() != rootRef)
+                        p.setParentRef(rootRef);
+                }
+            }
         }
     }
 
-    public boolean isParallelDisabled() {
-        return parallelDisabled;
+    public Page getRootPage() {
+        return root;
     }
 
-    public void acquireSharedLock() {
+    public void newRoot(Page newRoot) {
+        setRootRef(newRoot);
+    }
+
+    private void acquireSharedLock() {
         lock.readLock().lock();
     }
 
-    public void releaseSharedLock() {
+    private void releaseSharedLock() {
         lock.readLock().unlock();
     }
 
-    void acquireExclusiveLock() {
+    private void acquireExclusiveLock() {
         lock.writeLock().lock();
     }
 
-    void releaseExclusiveLock() {
+    private void releaseExclusiveLock() {
         lock.writeLock().unlock();
     }
 
@@ -192,12 +204,16 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
         return config.get(key);
     }
 
-    public BTreeStorage getBtreeStorage() {
+    public BTreeStorage getBTreeStorage() {
         return btreeStorage;
     }
 
     public PageStorageMode getPageStorageMode() {
         return pageStorageMode;
+    }
+
+    public void setPageStorageMode(PageStorageMode pageStorageMode) {
+        this.pageStorageMode = pageStorageMode;
     }
 
     @Override
@@ -218,10 +234,6 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
         return binarySearch(key, columnIndexes);
     }
 
-    public PageOperationHandler getNodePageOperationHandler() {
-        return nodePageOperationHandler;
-    }
-
     // test only
     public int getLevel(K key) {
         int level = 1;
@@ -231,23 +243,12 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
             level++;
             parentRef = parentRef.getPage().getParentRef();
         }
-        while (p.getDynamicInfo().state == Page.State.SPLITTED) {
-            p = p.getDynamicInfo().redirect;
-            int index;
-            if (getKeyType().compare(key, p.getKey(0)) < 0)
-                index = 0;
-            else
-                index = 1;
-            p = p.getChildPage(index);
-            level++;
-        }
         return level;
     }
 
     @SuppressWarnings("unchecked")
     private V binarySearch(Object key, boolean allColumns) {
         Page p = root.gotoLeafPage(key);
-        p = p.redirectIfSplited(key);
         int index = p.binarySearch(key);
         return index >= 0 ? (V) p.getValue(index, allColumns) : null;
     }
@@ -255,87 +256,8 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
     @SuppressWarnings("unchecked")
     private V binarySearch(Object key, int[] columnIndexes) {
         Page p = root.gotoLeafPage(key);
-        p = p.redirectIfSplited(key);
         int index = p.binarySearch(key);
         return index >= 0 ? (V) p.getValue(index, columnIndexes) : null;
-    }
-
-    // 如果map是只读的或者已经关闭了就不能再写了，并且不允许值为null
-    private void checkWrite(V value) {
-        DataUtils.checkNotNull(value, "value");
-        checkWrite();
-    }
-
-    // 有子类用到
-    protected void checkWrite() {
-        if (btreeStorage.isClosed()) {
-            throw DataUtils.newIllegalStateException(DataUtils.ERROR_CLOSED, "This map is closed");
-        }
-        if (readOnly) {
-            throw DataUtils.newUnsupportedOperationException("This map is read-only");
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private <R> PageOperation.Listener<R> getPageOperationListener() {
-        Object object = Thread.currentThread();
-        PageOperation.Listener<R> listener;
-        if (object instanceof PageOperation.Listener)
-            listener = (PageOperation.Listener<R>) object;
-        else if (object instanceof PageOperation.ListenerFactory)
-            listener = ((PageOperation.ListenerFactory<R>) object).createListener();
-        else
-            listener = new PageOperation.SyncListener<R>();
-        listener.startListen();
-        return listener;
-    }
-
-    @Override
-    public V put(K key, V value) {
-        PageOperation.Listener<V> listener = getPageOperationListener();
-        put(key, value, listener);
-        return listener.await();
-    }
-
-    @Override
-    public V putIfAbsent(K key, V value) {
-        PageOperation.Listener<V> listener = getPageOperationListener();
-        putIfAbsent(key, value, listener);
-        return listener.await();
-    }
-
-    @Override
-    public V remove(K key) {
-        PageOperation.Listener<V> listener = getPageOperationListener();
-        remove(key, listener);
-        return listener.await();
-    }
-
-    @Override
-    public boolean replace(K key, V oldValue, V newValue) {
-        PageOperation.Listener<Boolean> listener = getPageOperationListener();
-        replace(key, oldValue, newValue, listener);
-        return listener.await();
-    }
-
-    @Override
-    public K append(V value) {
-        PageOperation.Listener<K> listener = getPageOperationListener();
-        K key = append(value, listener);
-        listener.await();
-        return key;
-    }
-
-    /**
-     * Use the new root page from now on.
-     * 
-     * @param newRoot the new root page
-     */
-    public void newRoot(Page newRoot) {
-        if (root != newRoot) {
-            root = newRoot;
-            setRootRef();
-        }
     }
 
     @Override
@@ -355,14 +277,13 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
      * @return the key, or null if the map is empty
      */
     @SuppressWarnings("unchecked")
-    protected K getFirstLast(boolean first) {
-        if (size() == 0) {
+    private K getFirstLast(boolean first) {
+        if (isEmpty()) {
             return null;
         }
         Page p = root;
         while (true) {
             if (p.isLeaf()) {
-                p = p.redirectIfSplited(first);
                 return (K) p.getKey(first ? 0 : p.getKeyCount() - 1);
             }
             p = p.getChildPage(first ? 0 : getChildPageCount(p) - 1);
@@ -397,14 +318,13 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
      * @param excluding if the given upper/lower bound is exclusive
      * @return the key, or null if no such key exists
      */
-    protected K getMinMax(K key, boolean min, boolean excluding) {
+    private K getMinMax(K key, boolean min, boolean excluding) {
         return getMinMax(root, key, min, excluding);
     }
 
     @SuppressWarnings("unchecked")
     private K getMinMax(Page p, K key, boolean min, boolean excluding) {
         if (p.isLeaf()) {
-            p = p.redirectIfSplited(key);
             int x = p.binarySearch(key);
             if (x < 0) {
                 x = -x - (min ? 2 : 1);
@@ -416,12 +336,7 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
             }
             return (K) p.getKey(x);
         }
-        int x = p.binarySearch(key);
-        if (x < 0) {
-            x = -x - 1;
-        } else {
-            x++;
-        }
+        int x = p.getPageIndex(key);
         while (true) {
             if (x < 0 || x >= getChildPageCount(p)) {
                 return null;
@@ -457,10 +372,6 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
         size.decrementAndGet();
     }
 
-    void resetSize() {
-        size.set(0);
-    }
-
     @Override
     public boolean containsKey(K key) {
         return get(key) != null;
@@ -473,20 +384,24 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
 
     @Override
     public boolean isInMemory() {
-        return false;
+        return inMemory;
+    }
+
+    public boolean isReadOnly() {
+        return readOnly;
     }
 
     @Override
     public StorageMapCursor<K, V> cursor(K from) {
-        return cursor(IterationParameters.create(from));
+        return cursor(CursorParameters.create(from));
     }
 
     @Override
-    public StorageMapCursor<K, V> cursor(IterationParameters<K> parameters) {
+    public StorageMapCursor<K, V> cursor(CursorParameters<K> parameters) {
         if (parameters.pageKeys == null)
-            return new BTreeCursor<>(this, root, parameters);
+            return new BTreeCursor<>(this, parameters);
         else
-            return new PageKeyCursor<>(root, parameters);
+            return new PageKeyCursor<>(this, parameters);
     }
 
     @Override
@@ -500,7 +415,6 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
             size.set(0);
             maxKey.set(0);
             newRoot(LeafPage.createEmpty(this));
-            disableParallelIfNeeded();
             root.setReplicationHostIds(replicationHostIds);
         } finally {
             releaseExclusiveLock();
@@ -551,27 +465,8 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
         }
     }
 
-    public boolean isReadOnly() {
-        return readOnly;
-    }
-
-    public BTreeStorage getBTreeStorage() {
-        return btreeStorage;
-    }
-
-    /**
-     * Get the child page count for this page. This is to allow another map
-     * implementation to override the default, in case the last child is not to be used.
-     * 
-     * @param p the page
-     * @return the number of direct children
-     */
     public int getChildPageCount(Page p) {
         return p.getRawChildPageCount();
-    }
-
-    protected String getType() {
-        return "BTree";
     }
 
     @Override
@@ -586,13 +481,7 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
 
     @Override
     public String toString() {
-        StringBuilder buff = new StringBuilder();
-        DataUtils.appendMap(buff, "name", name);
-        String type = getType();
-        if (type != null) {
-            DataUtils.appendMap(buff, "type", type);
-        }
-        return buff.toString();
+        return name;
     }
 
     public void printPage() {
@@ -613,63 +502,165 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
         return btreeStorage.getMemorySpaceUsed();
     }
 
-    public Page getRootPage() {
-        return root;
-    }
-
-    public void setPageStorageMode(PageStorageMode pageStorageMode) {
-        this.pageStorageMode = pageStorageMode;
-    }
-
     public Page gotoLeafPage(Object key) {
         return root.gotoLeafPage(key);
     }
 
-    //////////////////// 以下是异步API的实现 ////////////////////////////////
+    public Page gotoLeafPage(Object key, boolean markDirty) {
+        return root.gotoLeafPage(key, markDirty);
+    }
+
+    // 如果map是只读的或者已经关闭了就不能再写了，并且不允许值为null
+    private void checkWrite(V value) {
+        DataUtils.checkNotNull(value, "value");
+        checkWrite();
+    }
+
+    private void checkWrite() {
+        if (btreeStorage.isClosed()) {
+            throw DataUtils.newIllegalStateException(DataUtils.ERROR_CLOSED, "This map is closed");
+        }
+        if (readOnly) {
+            throw DataUtils.newUnsupportedOperationException("This map is read-only");
+        }
+    }
+
+    //////////////////// 以下是同步和异步API的实现 ////////////////////////////////
 
     @Override
     public void get(K key, AsyncHandler<AsyncResult<V>> handler) {
-        Get<K, V> get = new Get<>(this, key, handler);
-        pohFactory.addPageOperation(get);
+        V v = get(key);
+        handler.handle(new AsyncResult<>(v));
+    }
+
+    @Override
+    public V put(K key, V value) {
+        return put0(key, value, null);
     }
 
     @Override
     public void put(K key, V value, AsyncHandler<AsyncResult<V>> handler) {
+        put0(key, value, handler);
+    }
+
+    private V put0(K key, V value, AsyncHandler<AsyncResult<V>> handler) {
         checkWrite(value);
         Put<K, V, V> put = new Put<>(this, key, value, handler);
-        pohFactory.addPageOperation(put);
+        return runPageOperation(put);
+    }
+
+    @Override
+    public V putIfAbsent(K key, V value) {
+        return putIfAbsent0(key, value, null);
     }
 
     @Override
     public void putIfAbsent(K key, V value, AsyncHandler<AsyncResult<V>> handler) {
+        putIfAbsent0(key, value, handler);
+    }
+
+    private V putIfAbsent0(K key, V value, AsyncHandler<AsyncResult<V>> handler) {
         checkWrite(value);
         PutIfAbsent<K, V> putIfAbsent = new PutIfAbsent<>(this, key, value, handler);
-        pohFactory.addPageOperation(putIfAbsent);
+        return runPageOperation(putIfAbsent);
+    }
+
+    @Override
+    public boolean replace(K key, V oldValue, V newValue) {
+        return replace0(key, oldValue, newValue, null);
     }
 
     @Override
     public void replace(K key, V oldValue, V newValue, AsyncHandler<AsyncResult<Boolean>> handler) {
+        replace0(key, oldValue, newValue, handler);
+    }
+
+    private boolean replace0(K key, V oldValue, V newValue, AsyncHandler<AsyncResult<Boolean>> handler) {
         checkWrite(newValue);
         Replace<K, V> replace = new Replace<>(this, key, oldValue, newValue, handler);
-        pohFactory.addPageOperation(replace);
+        return runPageOperation(replace);
+    }
+
+    @Override
+    public K append(V value) {
+        return append0(value, null);
+    }
+
+    @Override
+    public K append(V value, AsyncHandler<AsyncResult<K>> handler) {
+        return append0(value, handler);
+    }
+
+    @SuppressWarnings("unchecked")
+    private K append0(V value, AsyncHandler<AsyncResult<K>> handler) {
+        checkWrite(value);
+        // 先得到一个long类型的key
+        K key = (K) ValueLong.get(maxKey.incrementAndGet());
+        Append<K, V> append = new Append<>(this, key, value, handler);
+        runPageOperation(append);
+        return key;
+    }
+
+    @Override
+    public V remove(K key) {
+        return remove0(key, null);
     }
 
     @Override
     public void remove(K key, AsyncHandler<AsyncResult<V>> handler) {
-        checkWrite();
-        Remove<K, V> remove = new Remove<>(this, key, handler);
-        pohFactory.addPageOperation(remove);
+        remove0(key, handler);
     }
 
-    @Override
-    @SuppressWarnings("unchecked")
-    public K append(V value, AsyncHandler<AsyncResult<K>> handler) {
+    private V remove0(K key, AsyncHandler<AsyncResult<V>> handler) {
         checkWrite();
-        // 先得到一个long类型的key
-        K key = (K) ValueLong.get(maxKey.incrementAndGet());
-        Append<K, V> append = new Append<>(this, key, value, handler);
-        pohFactory.addPageOperation(append);
-        return key;
+        Remove<K, V> remove = new Remove<>(this, key, handler);
+        return runPageOperation(remove);
+    }
+
+    private <R> R runPageOperation(SingleWrite<?, ?, R> po) {
+        PageOperationHandler poHandler = getPageOperationHandler(false);
+        // 先快速试一次，如果不成功再用异步等待的方式
+        if (po.run(poHandler) == PageOperationResult.SUCCEEDED)
+            return po.getResult();
+        poHandler = getPageOperationHandler(true);
+        if (po.getResultHandler() == null) { // 同步
+            PageOperation.Listener<R> listener = getPageOperationListener();
+            po.setResultHandler(listener);
+            poHandler.handlePageOperation(po);
+            return listener.await();
+        } else { // 异步
+            poHandler.handlePageOperation(po);
+            return null;
+        }
+    }
+
+    // 如果当前线程不是PageOperationHandler，第一次运行时创建一个DummyPageOperationHandler
+    // 第二次运行时需要加到现有线程池某个PageOperationHandler的队列中
+    private PageOperationHandler getPageOperationHandler(boolean useThreadPool) {
+        Object t = Thread.currentThread();
+        if (t instanceof PageOperationHandler) {
+            return (PageOperationHandler) t;
+        } else {
+            if (useThreadPool) {
+                return pohFactory.getPageOperationHandler();
+            } else {
+                return new PageOperationHandler.DummyPageOperationHandler();
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private <R> PageOperation.Listener<R> getPageOperationListener() {
+        Object object = Thread.currentThread();
+        PageOperation.Listener<R> listener;
+        if (object instanceof PageOperation.Listener)
+            listener = (PageOperation.Listener<R>) object;
+        else if (object instanceof PageOperation.ListenerFactory)
+            listener = ((PageOperation.ListenerFactory<R>) object).createListener();
+        else
+            listener = new PageOperation.SyncListener<R>();
+        listener.startListen();
+        return listener;
     }
 
     ////////////////////// 以下是分布式API的实现 ////////////////////////////////
@@ -953,12 +944,7 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
             int index = 0;
             while (p.isNode()) {
                 parent = p;
-                index = p.binarySearch(key);
-                if (index < 0) {
-                    index = -index - 1;
-                } else {
-                    index++;
-                }
+                index = p.getPageIndex(key);
                 PageReference r = p.getChildPageReference(index);
                 if (r.isRemotePage()) {
                     break;
@@ -998,12 +984,7 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
             return;
         }
         // node page
-        int x = p.binarySearch(pk.key);
-        if (x < 0) {
-            x = -x - 1;
-        } else {
-            x++;
-        }
+        int x = p.getPageIndex(pk.key);
         if (pk.first && p.isLeafChildPage(x)) {
             x = 0;
         }
@@ -1034,13 +1015,8 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
         if (p.isLeaf() || p.isRemote()) {
             return getReplicationNodes(p);
         }
-        int index = p.binarySearch(key);
         // p is a node
-        if (index < 0) {
-            index = -index - 1;
-        } else {
-            index++;
-        }
+        int index = p.getPageIndex(key);
         return getReplicationNodes(p.getChildPage(index), key);
     }
 
@@ -1315,12 +1291,7 @@ public class BTreeMap<K, V> extends StorageMapBase<K, V> {
         Page p = root;
         while (p.isNode()) {
             // 注意: index是子page的数组索引，不是keys数组的索引
-            int index = from == null ? -1 : p.binarySearch(from);
-            if (index < 0) {
-                index = -index - 1;
-            } else {
-                index++;
-            }
+            int index = from == null ? 0 : p.getPageIndex(from);
             pos = new CursorPos(p, index + 1, pos);
             if (p.isNodeChildPage(index)) {
                 p = p.getChildPage(index);

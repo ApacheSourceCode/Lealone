@@ -10,22 +10,14 @@ import java.util.concurrent.CountDownLatch;
 import org.junit.Test;
 import org.lealone.db.value.ValueLong;
 import org.lealone.storage.StorageMapCursor;
-import org.lealone.storage.aose.AOStorage;
 import org.lealone.storage.aose.btree.BTreeMap;
-import org.lealone.storage.aose.btree.page.Page;
-import org.lealone.storage.aose.btree.page.PageOperations.RunnableOperation;
-import org.lealone.test.TestBase;
 
 // -Xms800M -Xmx800M -XX:+PrintGCDetails -XX:+PrintGCTimeStamps
-public class BTreeMapTest extends TestBase {
-
-    private AOStorage storage;
-    private BTreeMap<Integer, String> map;
-
+public class BTreeMapTest extends AoseTestBase {
     @Test
     public void run() {
-        init();
         // for (int i = 0; i < 10; i++) {
+        init();
 
         testSyncOperations();
         testAsyncOperations();
@@ -33,25 +25,7 @@ public class BTreeMapTest extends TestBase {
         testRemove();
         testSave();
         testAppend();
-
         // }
-
-        // perf();
-    }
-
-    private void init() {
-        int pageSplitSize = 16 * 1024;
-        pageSplitSize = 4 * 1024;
-        pageSplitSize = 1 * 1024;
-        // pageSplitSize = 32 * 1024;
-        storage = AOStorageTest.openStorage(pageSplitSize);
-        openMap();
-    }
-
-    private void openMap() {
-        if (map == null || map.isClosed()) {
-            map = storage.openBTreeMap("BTreeMapTest");
-        }
     }
 
     void testSyncOperations() {
@@ -197,48 +171,6 @@ public class BTreeMapTest extends TestBase {
         }
 
         assertEquals(1, map.size());
-    }
-
-    // 性能测试
-    void perf() {
-        openMap();
-        for (int n = 1; n <= 50; n++) {
-            map.clear();
-            int count = 90000;
-            // count = 100;
-            count = 20000;
-            CountDownLatch latch = new CountDownLatch(count);
-            long t1 = System.currentTimeMillis();
-            for (int i = 1; i <= count; i++) {
-                Integer key = i;
-                String value = "value-" + i;
-                map.put(key, value, ar -> {
-                    latch.countDown();
-                });
-            }
-
-            try {
-                latch.await();
-                long t2 = System.currentTimeMillis();
-                CountDownLatch latch2 = new CountDownLatch(1);
-                map.getNodePageOperationHandler().handlePageOperation(new RunnableOperation(() -> {
-                    latch2.countDown();
-                }));
-                latch2.await();
-                Page root = map.getRootPage();
-                root.binarySearch(count);
-                Page first = root.getChildPage(0);
-                Object[] keys = first.getKeys();
-                keys.clone();
-                // System.out.println("keys: " + Arrays.asList(keys));
-                System.out.println("loop: " + n + ", time: " + (t2 - t1) + " ms, level:" + map.getLevel(count));
-            } catch (InterruptedException e) {
-                e.printStackTrace();
-            }
-            assertEquals(count, map.size());
-        }
-        map.getRootPage();
-        // map.printPage();
     }
 
     void testSplit() {

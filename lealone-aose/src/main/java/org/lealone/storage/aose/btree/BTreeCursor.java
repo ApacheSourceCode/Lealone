@@ -5,7 +5,7 @@
  */
 package org.lealone.storage.aose.btree;
 
-import org.lealone.storage.IterationParameters;
+import org.lealone.storage.CursorParameters;
 import org.lealone.storage.StorageMapCursor;
 import org.lealone.storage.aose.btree.page.Page;
 
@@ -18,20 +18,20 @@ import org.lealone.storage.aose.btree.page.Page;
  * @author H2 Group
  * @author zhh
  */
-class BTreeCursor<K, V> implements StorageMapCursor<K, V> {
+public class BTreeCursor<K, V> implements StorageMapCursor<K, V> {
 
-    private final BTreeMap<K, ?> map;
-    private final IterationParameters<K> parameters;
+    protected final BTreeMap<K, ?> map;
+    protected final CursorParameters<K> parameters;
+    protected CursorPos pos;
 
-    private CursorPos pos;
     private K key;
     private V value;
 
-    BTreeCursor(BTreeMap<K, ?> map, Page root, IterationParameters<K> parameters) {
+    public BTreeCursor(BTreeMap<K, ?> map, CursorParameters<K> parameters) {
         this.map = map;
         this.parameters = parameters;
         // 定位到>=from的第一个leaf page
-        min(root, parameters.from);
+        min(map.getRootPage(), parameters.from);
     }
 
     @Override
@@ -84,10 +84,9 @@ class BTreeCursor<K, V> implements StorageMapCursor<K, V> {
      * @param p the page to start
      * @param from the key to search
      */
-    private void min(Page p, K from) {
+    protected void min(Page p, K from) {
         while (true) {
             if (p.isLeaf()) {
-                p = p.tmpCopyIfSplited();
                 int x = from == null ? 0 : p.binarySearch(from);
                 if (x < 0) {
                     x = -x - 1;
@@ -95,12 +94,7 @@ class BTreeCursor<K, V> implements StorageMapCursor<K, V> {
                 pos = new CursorPos(p, x, pos);
                 break;
             }
-            int x = from == null ? -1 : p.binarySearch(from);
-            if (x < 0) {
-                x = -x - 1;
-            } else {
-                x++;
-            }
+            int x = from == null ? 0 : p.getPageIndex(from);
             pos = new CursorPos(p, x + 1, pos);
             p = p.getChildPage(x);
         }

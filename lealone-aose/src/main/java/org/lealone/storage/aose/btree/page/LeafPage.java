@@ -16,7 +16,6 @@ import org.lealone.net.NetNode;
 import org.lealone.storage.aose.btree.BTreeMap;
 import org.lealone.storage.aose.btree.chunk.Chunk;
 import org.lealone.storage.page.LeafPageMovePlan;
-import org.lealone.storage.page.PageOperationHandler;
 import org.lealone.storage.type.StorageDataType;
 
 public class LeafPage extends LocalPage {
@@ -39,10 +38,6 @@ public class LeafPage extends LocalPage {
 
     public LeafPage(BTreeMap<?, ?> map) {
         super(map);
-    }
-
-    LeafPage(BTreeMap<?, ?> map, PageOperationHandler handler) {
-        super(map, handler);
     }
 
     @Override
@@ -152,7 +147,6 @@ public class LeafPage extends LocalPage {
     }
 
     @Override
-    @Deprecated
     public long getTotalCount() {
         if (ASSERT) {
             long check = keys.length;
@@ -193,20 +187,15 @@ public class LeafPage extends LocalPage {
         newValues[index] = value;
         map.incrementSize();// 累加全局计数器
         addMemory(map.getKeyType().getMemory(key) + map.getValueType().getMemory(value));
-        LeafPage newPage = create(map, newKeys, newValues, totalCount + 1, getMemory(), handler);
+        LeafPage newPage = create(map, newKeys, newValues, totalCount + 1, getMemory());
         newPage.cachedCompare = cachedCompare;
         newPage.replicationHostIds = replicationHostIds;
         newPage.leafPageMovePlan = leafPageMovePlan;
-        newPage.parentRefRef = parentRefRef;
+        newPage.setParentRef(getParentRef());
         newPage.setRef(getRef());
         // mark the old as deleted
         removePage();
         return newPage;
-    }
-
-    @Override
-    public int getKeyCount() {
-        return keys.length;
     }
 
     @Override
@@ -220,6 +209,11 @@ public class LeafPage extends LocalPage {
         values = newValues;
         totalCount--;
         map.decrementSize(); // 递减全局计数器
+    }
+
+    @Override
+    public void removeAllRecursive() {
+        removePage();
     }
 
     @Override
@@ -287,11 +281,11 @@ public class LeafPage extends LocalPage {
     }
 
     private void readColumnPage(int columnIndex) {
-        ColumnPage page = (ColumnPage) map.getBtreeStorage().readPage(columnPages[columnIndex].pos);
+        ColumnPage page = (ColumnPage) map.getBTreeStorage().readPage(columnPages[columnIndex].pos);
         if (page.values == null) {
             columnPages[columnIndex].page = page;
             page.readColumn(values, columnIndex);
-            map.getBtreeStorage().cachePage(columnPages[columnIndex].pos, page, page.getMemory());
+            map.getBTreeStorage().cachePage(columnPages[columnIndex].pos, page, page.getMemory());
         } else {
             // 有可能因为缓存紧张，导致keys所在的page被逐出了，但是列所在的某些page还在
             values = page.values;
@@ -457,18 +451,13 @@ public class LeafPage extends LocalPage {
         newPage.cachedCompare = cachedCompare;
         newPage.replicationHostIds = replicationHostIds;
         newPage.leafPageMovePlan = leafPageMovePlan;
-        newPage.parentRefRef = parentRefRef;
+        newPage.setParentRef(getParentRef());
         newPage.setRef(getRef());
         if (removePage) {
             // mark the old as deleted
             removePage();
         }
         return newPage;
-    }
-
-    @Override
-    public void removeAllRecursive() {
-        removePage();
     }
 
     /**
@@ -478,16 +467,11 @@ public class LeafPage extends LocalPage {
      * @return the new page
      */
     public static LeafPage createEmpty(BTreeMap<?, ?> map) {
-        return create(map, EMPTY_OBJECT_ARRAY, EMPTY_OBJECT_ARRAY, 0, PageUtils.PAGE_MEMORY, null);
+        return create(map, EMPTY_OBJECT_ARRAY, EMPTY_OBJECT_ARRAY, 0, PageUtils.PAGE_MEMORY);
     }
 
     static LeafPage create(BTreeMap<?, ?> map, Object[] keys, Object[] values, long totalCount, int memory) {
-        return create(map, keys, values, totalCount, memory, null);
-    }
-
-    private static LeafPage create(BTreeMap<?, ?> map, Object[] keys, Object[] values, long totalCount, int memory,
-            PageOperationHandler handler) {
-        LeafPage p = new LeafPage(map, handler);
+        LeafPage p = new LeafPage(map);
         // the position is 0
         p.keys = keys;
         p.values = values;
@@ -516,22 +500,6 @@ public class LeafPage extends LocalPage {
         p.write(chunk, buff, true);
         int pageLength = chunk.pagePositionToLengthMap.get(0L);
         buff.putInt(start, pageLength);
-    }
-
-    @Override
-    protected void toString(StringBuilder buff) {
-        for (int i = 0, len = keys.length; i <= len; i++) {
-            if (i > 0) {
-                buff.append(" ");
-            }
-            if (i < len) {
-                buff.append(keys[i]);
-                if (values != null) {
-                    buff.append(':');
-                    buff.append(values[i]);
-                }
-            }
-        }
     }
 
     @Override

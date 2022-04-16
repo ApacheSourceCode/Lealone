@@ -71,7 +71,7 @@ public class NodePage extends LocalPage {
         if (ref.page != null) {
             return ref.page;
         } else {
-            Page p = map.getBtreeStorage().readPage(ref, ref.pos);
+            Page p = map.getBTreeStorage().readPage(ref, ref.pos);
             ref.replacePage(p);
             p.setRef(ref);
             p.setParentRef(getRef());
@@ -101,7 +101,6 @@ public class NodePage extends LocalPage {
     }
 
     @Override
-    @Deprecated
     public long getTotalCount() {
         long totalCount = 0;
         for (PageReference x : children) {
@@ -183,7 +182,8 @@ public class NodePage extends LocalPage {
 
     @Override
     public void remove(int index) {
-        super.remove(index);
+        if (keys.length > 0) // 删除最后一个children时，keys已经空了
+            super.remove(index);
         addMemory(-PageUtils.PAGE_MEMORY_CHILD);
         int childCount = children.length;
         PageReference[] newChildren = new PageReference[childCount - 1];
@@ -387,11 +387,11 @@ public class NodePage extends LocalPage {
                     long pos = children[i].pos;
                     int type = PageUtils.getPageType(pos);
                     if (type == PageUtils.PAGE_TYPE_LEAF) {
-                        Chunk c = map.getBtreeStorage().getChunk(pos);
+                        Chunk c = map.getBTreeStorage().getChunk(pos);
                         int mem = c.getPageLength(pos);
-                        map.getBtreeStorage().removePage(pos, mem);
+                        map.getBTreeStorage().removePage(pos, mem);
                     } else {
-                        map.getBtreeStorage().readPage(pos).removeAllRecursive();
+                        map.getBTreeStorage().readPage(pos).removeAllRecursive();
                     }
                 }
             }
@@ -473,21 +473,6 @@ public class NodePage extends LocalPage {
     }
 
     @Override
-    protected void toString(StringBuilder buff) {
-        for (int i = 0, len = keys.length; i <= len; i++) {
-            if (i > 0) {
-                buff.append(" ");
-            }
-            if (children != null) {
-                buff.append("[" + Long.toHexString(children[i].pos) + "] ");
-            }
-            if (i < keys.length) {
-                buff.append(keys[i]);
-            }
-        }
-    }
-
-    @Override
     protected void getPrettyPageInfoRecursive(StringBuilder buff, String indent, PrettyPageInfo info) {
         if (children != null) {
             buff.append(indent).append("children: ").append(keys.length + 1).append('\n');
@@ -497,7 +482,7 @@ public class NodePage extends LocalPage {
                     children[i].page.getPrettyPageInfoRecursive(indent + "  ", info);
                 } else {
                     if (info.readOffLinePage) {
-                        map.getBtreeStorage().readPage(children[i].pos).getPrettyPageInfoRecursive(indent + "  ", info);
+                        map.getBTreeStorage().readPage(children[i].pos).getPrettyPageInfoRecursive(indent + "  ", info);
                     } else {
                         buff.append(indent).append("  ");
                         buff.append("*** off-line *** ").append(children[i]).append('\n');
