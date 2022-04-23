@@ -6,7 +6,6 @@
 package org.lealone.orm.property;
 
 import java.sql.Timestamp;
-import java.util.Map;
 
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueTimestamp;
@@ -14,63 +13,26 @@ import org.lealone.orm.Model;
 
 /**
  * Property for java sql Timestamp.
- *
- * @param <R> the root model bean type
  */
-public class PTimestamp<R> extends PBaseDate<R, Timestamp> {
+public class PTimestamp<M extends Model<M>> extends PBaseDate<M, Timestamp> {
 
-    private Timestamp value;
-
-    /**
-     * Construct with a property name and root instance.
-     *
-     * @param name property name
-     * @param root the root model bean instance
-     */
-    public PTimestamp(String name, R root) {
-        super(name, root);
-    }
-
-    private PTimestamp<R> P(Model<?> model) {
-        return this.<PTimestamp<R>> getModelProperty(model);
-    }
-
-    public final R set(Timestamp value) {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).set(value);
-        }
-        if (!areEqual(this.value, value)) {
-            this.value = value;
-            expr().set(name, ValueTimestamp.get(value));
-        }
-        return root;
+    public PTimestamp(String name, M model) {
+        super(name, model);
     }
 
     @Override
-    public R set(Object value) {
-        return set(Timestamp.valueOf(value.toString()));
+    protected Value createValue(Timestamp value) {
+        return ValueTimestamp.get(value);
     }
 
-    public final Timestamp get() {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).get();
-        }
-        return value;
+    @Override
+    protected Object encodeValue() {
+        return value.getTime();
     }
 
     @Override
     protected void deserialize(Value v) {
         value = v.getTimestamp();
-    }
-
-    @Override
-    protected void serialize(Map<String, Object> map) {
-        if (value != null)
-            map.put(getName(), value.getTime());
-        else
-            map.put(getName(), 0);
     }
 
     @Override

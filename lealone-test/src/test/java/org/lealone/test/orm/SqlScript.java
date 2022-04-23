@@ -5,20 +5,20 @@
  */
 package org.lealone.test.orm;
 
+import org.lealone.test.TestBase.MainTest;
 import org.lealone.test.TestBase.SqlExecutor;
-import org.lealone.test.UnitTestBase;
-import org.lealone.test.service.ServiceTest;
+import org.lealone.test.service.ExecuteServiceTest;
 import org.lealone.test.service.impl.AllTypeServiceImpl;
 import org.lealone.test.service.impl.HelloWorldServiceImpl;
 import org.lealone.test.service.impl.UserServiceImpl;
 
-public class SqlScript {
+public class SqlScript implements MainTest {
 
     public static void main(String[] args) {
         new SqlScriptTest().runTest();
     }
 
-    private static class SqlScriptTest extends UnitTestBase {
+    private static class SqlScriptTest extends OrmTestBase {
         @Override
         public void test() {
             createCustomerTable(this);
@@ -30,15 +30,26 @@ public class SqlScript {
             createAllModelPropertyTable(this);
             createUserService(this);
             createHelloWorldService(this);
+            createAllTypeService(this);
         }
     }
 
     private static final String MODEL_PACKAGE_NAME = OrmTest.class.getPackage().getName() + ".generated";
-    private static final String SERVICE_PACKAGE_NAME = ServiceTest.class.getPackage().getName() + ".generated";
+    private static final String SERVICE_PACKAGE_NAME = ExecuteServiceTest.class.getPackage().getName() + ".generated";
     private static String GENERATED_CODE_PATH = "./src/test/java";
 
     public static void setCodePath(String path) {
         GENERATED_CODE_PATH = path;
+    }
+
+    public static void createTables(SqlExecutor executor) {
+        createCustomerTable(executor);
+        createCustomerAddressTable(executor);
+        createUserTable(executor);
+        createProductTable(executor);
+        createOrderTable(executor);
+        createOrderItemTable(executor);
+        createAllModelPropertyTable(executor);
     }
 
     public static void createUserTable(SqlExecutor executor) {

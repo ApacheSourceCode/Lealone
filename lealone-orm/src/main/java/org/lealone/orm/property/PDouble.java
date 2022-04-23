@@ -5,68 +5,32 @@
  */
 package org.lealone.orm.property;
 
-import java.util.Map;
-
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueDouble;
 import org.lealone.orm.Model;
 
 /**
- * Double property.
- *
- * @param <R> the root model bean type
+ * Double property. 
  */
-public class PDouble<R> extends PBaseNumber<R, Double> {
+public class PDouble<M extends Model<M>> extends PBaseNumber<M, Double> {
 
-    private double value;
-
-    /**
-     * Construct with a property name and root instance.
-     *
-     * @param name property name
-     * @param root the root model bean instance
-     */
-    public PDouble(String name, R root) {
-        super(name, root);
+    public PDouble(String name, M model) {
+        super(name, model);
     }
 
-    private PDouble<R> P(Model<?> model) {
-        return this.<PDouble<R>> getModelProperty(model);
-    }
-
-    public final R set(double value) {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).set(value);
-        }
-        if (!areEqual(this.value, value)) {
-            this.value = value;
-            expr().set(name, ValueDouble.get(value));
-        }
-        return root;
+    // 支持Float，避免总是加D后缀
+    public final M set(double value) {
+        return super.set(value);
     }
 
     @Override
-    public R set(Object value) {
-        return set(Double.valueOf(value.toString()).doubleValue());
-    }
-
-    public final double get() {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).get();
-        }
-        return value;
+    protected Value createValue(Double value) {
+        return ValueDouble.get(value);
     }
 
     @Override
     protected void deserialize(Value v) {
         value = v.getDouble();
-    }
-
-    @Override
-    protected void serialize(Map<String, Object> map) {
-        map.put(getName(), value);
     }
 
     @Override

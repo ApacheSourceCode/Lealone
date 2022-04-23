@@ -5,51 +5,28 @@
  */
 package org.lealone.orm.property;
 
-import java.util.Map;
-
 import org.lealone.db.value.Value;
-import org.lealone.db.value.ValueJavaObject;
+import org.lealone.db.value.ValueBytes;
 import org.lealone.orm.Model;
-import org.lealone.orm.ModelProperty;
-import org.lealone.orm.json.util.JsonUtil;
+import org.lealone.orm.json.Json;
 
 /**
- * byte[] property.
- *
- * @param <R> the root model bean type
+ * byte[] property. 
  */
-public class PBytes<R> extends ModelProperty<R> {
+public class PBytes<M extends Model<M>> extends PBase<M, byte[]> {
 
-    private byte[] value;
-
-    /**
-     * Construct with a property name and root instance.
-     *
-     * @param name property name
-     * @param root the root model bean instance
-     */
-    public PBytes(String name, R root) {
-        super(name, root);
+    public PBytes(String name, M model) {
+        super(name, model);
     }
 
-    private PBytes<R> P(Model<?> model) {
-        return this.<PBytes<R>> getModelProperty(model);
+    @Override
+    protected Value createValue(byte[] value) {
+        return ValueBytes.getNoCopy(value);
     }
 
-    public R set(byte[] value) {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).set(value);
-        }
-        if (!areEqual(this.value, value)) {
-            this.value = value;
-            expr().set(name, ValueJavaObject.getNoCopy(value, null));
-        }
-        return root;
-    }
-
-    public final byte[] get() {
-        return value;
+    @Override
+    protected Object encodeValue() {
+        return Json.BASE64_ENCODER.encode(value);
     }
 
     @Override
@@ -58,13 +35,7 @@ public class PBytes<R> extends ModelProperty<R> {
     }
 
     @Override
-    protected void serialize(Map<String, Object> map) {
-        if (value != null)
-            map.put(getName(), JsonUtil.BASE64_ENCODER.encode(value));
-    }
-
-    @Override
     protected void deserialize(Object v) {
-        value = JsonUtil.BASE64_DECODER.decode(v.toString());
+        value = Json.BASE64_DECODER.decode(v.toString());
     }
 }

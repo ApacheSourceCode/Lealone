@@ -8,16 +8,15 @@ package org.lealone.test.orm;
 import java.util.concurrent.CountDownLatch;
 
 import org.junit.Test;
-import org.lealone.test.UnitTestBase;
 import org.lealone.test.orm.generated.Product;
 import org.lealone.test.orm.generated.User;
 
-public class OrmTransactionTest extends UnitTestBase {
+public class OrmTransactionTest extends OrmTestBase {
 
     @Test
     public void run() {
-        SqlScript.createUserTable(this);
-        SqlScript.createProductTable(this);
+        // SqlScript.createUserTable(this);
+        // SqlScript.createProductTable(this);
 
         // 测试在同一个线程中的多表事务
         try {

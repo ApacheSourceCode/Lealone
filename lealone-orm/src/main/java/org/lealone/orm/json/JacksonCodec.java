@@ -8,17 +8,13 @@
  *
  * SPDX-License-Identifier: EPL-2.0 OR Apache-2.0
  */
-package org.lealone.orm.json.jackson;
+package org.lealone.orm.json;
 
 import static java.time.format.DateTimeFormatter.ISO_INSTANT;
-import static org.lealone.orm.json.util.JsonUtil.BASE64_ENCODER;
 
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.StringWriter;
-import java.io.Writer;
-import java.lang.reflect.ParameterizedType;
-import java.lang.reflect.Type;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.Instant;
@@ -27,24 +23,20 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.lealone.orm.json.DecodeException;
-import org.lealone.orm.json.EncodeException;
-import org.lealone.orm.json.JsonArray;
-import org.lealone.orm.json.JsonObject;
-import org.lealone.orm.json.spi.JsonCodec;
+import org.lealone.orm.Model;
 
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.core.JsonTokenId;
-import com.fasterxml.jackson.core.type.TypeReference;
 
 /**
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
+ * @author zhh
  */
 @SuppressWarnings({ "unchecked", "rawtypes" })
-public class JacksonCodec implements JsonCodec {
+public class JacksonCodec {
 
     private static final JsonFactory factory = new JsonFactory();
 
@@ -53,79 +45,105 @@ public class JacksonCodec implements JsonCodec {
         factory.configure(JsonParser.Feature.ALLOW_COMMENTS, true);
     }
 
-    @Override
-    public <T> T fromString(String json, Class<T> clazz) throws DecodeException {
-        return fromParser(createParser(json), clazz);
-    }
-
-    public <T> T fromString(String str, TypeReference<T> typeRef) throws DecodeException {
-        return fromString(str, classTypeOf(typeRef));
-    }
-
-    @Override
-    public <T> T fromValue(Object json, Class<T> toValueType) {
-        throw new UnsupportedOperationException("Mapping is not available without Jackson Databind on the classpath");
-    }
-
-    public <T> T fromValue(Object json, TypeReference<T> type) {
-        throw new UnsupportedOperationException("Mapping is not available without Jackson Databind on the classpath");
-    }
-
-    @Override
-    public String toString(Object object, boolean pretty) throws EncodeException {
+    public static String encode(Object object, boolean pretty) throws EncodeException {
         StringWriter sw = new StringWriter();
-        JsonGenerator generator = createGenerator(sw, pretty);
+        JsonGenerator generator = null;
         try {
+            generator = factory.createGenerator(sw);
+            if (pretty) {
+                generator.useDefaultPrettyPrinter();
+            }
             encodeJson(object, generator);
             generator.flush();
             return sw.toString();
         } catch (IOException e) {
-            throw new EncodeException(e.getMessage(), e);
+            throw new DecodeException("Failed to decode:" + e.getMessage(), e);
         } finally {
             close(generator);
         }
     }
 
-    public static JsonParser createParser(String str) {
-        try {
-            return factory.createParser(str);
-        } catch (IOException e) {
-            throw new DecodeException("Failed to decode:" + e.getMessage(), e);
+    // In recursive calls, the callee is in charge of opening and closing the data structure
+    private static void encodeJson(Object json, JsonGenerator generator) throws IOException {
+        if (json instanceof JsonObject) {
+            json = ((JsonObject) json).getMap();
+        } else if (json instanceof JsonArray) {
+            json = ((JsonArray) json).getList();
         }
-    }
-
-    private static JsonGenerator createGenerator(Writer out, boolean pretty) {
-        try {
-            JsonGenerator generator = factory.createGenerator(out);
-            if (pretty) {
-                generator.useDefaultPrettyPrinter();
+        if (json instanceof Map) {
+            generator.writeStartObject();
+            for (Map.Entry<String, ?> e : ((Map<String, ?>) json).entrySet()) {
+                generator.writeFieldName(e.getKey());
+                encodeJson(e.getValue(), generator);
             }
-            return generator;
-        } catch (IOException e) {
-            throw new DecodeException("Failed to decode:" + e.getMessage(), e);
+            generator.writeEndObject();
+        } else if (json instanceof List) {
+            generator.writeStartArray();
+            for (Object item : (List<?>) json) {
+                encodeJson(item, generator);
+            }
+            generator.writeEndArray();
+        } else if (json instanceof CharSequence) {
+            generator.writeString(((CharSequence) json).toString());
+        } else if (json instanceof Number) {
+            if (json instanceof Short) {
+                generator.writeNumber((Short) json);
+            } else if (json instanceof Integer) {
+                generator.writeNumber((Integer) json);
+            } else if (json instanceof Long) {
+                generator.writeNumber((Long) json);
+            } else if (json instanceof Float) {
+                generator.writeNumber((Float) json);
+            } else if (json instanceof Double) {
+                generator.writeNumber((Double) json);
+            } else if (json instanceof Byte) {
+                generator.writeNumber((Byte) json);
+            } else if (json instanceof BigInteger) {
+                generator.writeNumber((BigInteger) json);
+            } else if (json instanceof BigDecimal) {
+                generator.writeNumber((BigDecimal) json);
+            } else {
+                throw new UnsupportedOperationException();
+            }
+        } else if (json instanceof Boolean) {
+            generator.writeBoolean((Boolean) json);
+        } else if (json instanceof Instant) {
+            // RFC-7493
+            generator.writeString((ISO_INSTANT.format((Instant) json)));
+        } else if (json instanceof byte[]) {
+            // RFC-7493
+            generator.writeString(Json.BASE64_ENCODER.encodeToString((byte[]) json));
+        } else if (json instanceof Enum) {
+            // vert.x extra (non standard but allowed conversion)
+            generator.writeString(((Enum<?>) json).name());
+        } else if (json instanceof Model) {
+            // 需要转成Map，不能直接用encode，否则嵌套model编码为json时前端不能识别
+            encodeJson(((Model) json).toMap(), generator);
+        } else if (json == null) {
+            generator.writeNull();
+        } else {
+            throw new UnsupportedOperationException();
         }
     }
 
-    public Object fromString(String str) throws DecodeException {
-        return fromParser(createParser(str), Object.class);
-    }
-
-    public static <T> T fromParser(JsonParser parser, Class<T> type) throws DecodeException {
+    public static <T> T decode(String json, Class<T> clazz) throws DecodeException {
+        JsonParser parser = null;
         Object res;
         JsonToken remaining;
         try {
+            parser = factory.createParser(json);
             parser.nextToken();
             res = parseAny(parser);
             remaining = parser.nextToken();
         } catch (IOException e) {
-            throw new DecodeException(e.getMessage(), e);
+            throw new DecodeException("Failed to decode:" + e.getMessage(), e);
         } finally {
             close(parser);
         }
         if (remaining != null) {
             throw new DecodeException("Unexpected trailing token");
         }
-        return cast(res, type);
+        return cast(res, clazz);
     }
 
     private static Object parseAny(JsonParser parser) throws IOException, DecodeException {
@@ -200,88 +218,6 @@ public class JacksonCodec implements JsonCodec {
         }
     }
 
-    static void close(Closeable parser) {
-        try {
-            parser.close();
-        } catch (IOException ignore) {
-        }
-    }
-
-    // In recursive calls, the callee is in charge of opening and closing the data structure
-    private static void encodeJson(Object json, JsonGenerator generator) throws EncodeException {
-        try {
-            if (json instanceof JsonObject) {
-                json = ((JsonObject) json).getMap();
-            } else if (json instanceof JsonArray) {
-                json = ((JsonArray) json).getList();
-            }
-            if (json instanceof Map) {
-                generator.writeStartObject();
-                for (Map.Entry<String, ?> e : ((Map<String, ?>) json).entrySet()) {
-                    generator.writeFieldName(e.getKey());
-                    encodeJson(e.getValue(), generator);
-                }
-                generator.writeEndObject();
-            } else if (json instanceof List) {
-                generator.writeStartArray();
-                for (Object item : (List<?>) json) {
-                    encodeJson(item, generator);
-                }
-                generator.writeEndArray();
-            } else if (json instanceof CharSequence) {
-                generator.writeString(((CharSequence) json).toString());
-            } else if (json instanceof Number) {
-                if (json instanceof Short) {
-                    generator.writeNumber((Short) json);
-                } else if (json instanceof Integer) {
-                    generator.writeNumber((Integer) json);
-                } else if (json instanceof Long) {
-                    generator.writeNumber((Long) json);
-                } else if (json instanceof Float) {
-                    generator.writeNumber((Float) json);
-                } else if (json instanceof Double) {
-                    generator.writeNumber((Double) json);
-                } else if (json instanceof Byte) {
-                    generator.writeNumber((Byte) json);
-                } else if (json instanceof BigInteger) {
-                    generator.writeNumber((BigInteger) json);
-                } else if (json instanceof BigDecimal) {
-                    generator.writeNumber((BigDecimal) json);
-                } else {
-                    throw new UnsupportedOperationException();
-                }
-            } else if (json instanceof Boolean) {
-                generator.writeBoolean((Boolean) json);
-            } else if (json instanceof Instant) {
-                // RFC-7493
-                generator.writeString((ISO_INSTANT.format((Instant) json)));
-            } else if (json instanceof byte[]) {
-                // RFC-7493
-                generator.writeString(BASE64_ENCODER.encodeToString((byte[]) json));
-            } else if (json instanceof Enum) {
-                // vert.x extra (non standard but allowed conversion)
-                generator.writeString(((Enum<?>) json).name());
-            } else if (json == null) {
-                generator.writeNull();
-            } else {
-                throw new UnsupportedOperationException();
-            }
-        } catch (IOException e) {
-            throw new EncodeException(e.getMessage(), e);
-        }
-    }
-
-    private static <T> Class<T> classTypeOf(TypeReference<T> typeRef) {
-        Type type = typeRef.getType();
-        if (type instanceof Class) {
-            return (Class<T>) type;
-        } else if (type instanceof ParameterizedType) {
-            return (Class<T>) ((ParameterizedType) type).getRawType();
-        } else {
-            throw new DecodeException();
-        }
-    }
-
     private static <T> T cast(Object o, Class<T> clazz) {
         if (o instanceof Map) {
             if (!clazz.isAssignableFrom(Map.class)) {
@@ -334,15 +270,11 @@ public class JacksonCodec implements JsonCodec {
         }
     }
 
-    /**
-     * Decode a given JSON string to a POJO of the given type.
-     * @param str the JSON string.
-     * @param type the type to map to.
-     * @param <T> the generic type.
-     * @return an instance of T
-     * @throws DecodeException when there is a parsing or invalid mapping.
-     */
-    public static <T> T decodeValue(String str, TypeReference<T> type) throws DecodeException {
-        return JacksonFactory.CODEC.fromString(str, type);
+    private static void close(Closeable closeable) {
+        try {
+            if (closeable != null)
+                closeable.close();
+        } catch (IOException ignore) {
+        }
     }
 }

@@ -5,63 +5,27 @@
  */
 package org.lealone.orm.property;
 
-import java.util.Map;
-
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueLong;
 import org.lealone.orm.Model;
 
 /**
  * Long property.
- *
- * @param <R> the root model bean type
  */
-public class PLong<R> extends PBaseNumber<R, Long> {
+public class PLong<M extends Model<M>> extends PBaseNumber<M, Long> {
 
-    private long value;
-
-    /**
-     * Construct with a property name and root instance.
-     *
-     * @param name property name
-     * @param root the root model bean instance
-     */
-    public PLong(String name, R root) {
-        super(name, root);
+    public PLong(String name, M model) {
+        super(name, model);
     }
 
-    private PLong<R> P(Model<?> model) {
-        return this.<PLong<R>> getModelProperty(model);
-    }
-
-    public R set(long value) {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).set(value);
-        }
-        if (!areEqual(this.value, value)) {
-            this.value = value;
-            expr().set(name, ValueLong.get(value));
-        }
-        return root;
+    // 支持int，避免总是加L后缀
+    public final M set(long value) {
+        return super.set(value);
     }
 
     @Override
-    public R set(Object value) {
-        return set(Long.valueOf(value.toString()).longValue());
-    }
-
-    public final long get() {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).get();
-        }
-        return value;
-    }
-
-    @Override
-    protected void serialize(Map<String, Object> map) {
-        map.put(getName(), value);
+    protected Value createValue(Long value) {
+        return ValueLong.get(value);
     }
 
     @Override

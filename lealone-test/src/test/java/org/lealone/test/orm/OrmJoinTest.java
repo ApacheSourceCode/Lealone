@@ -8,20 +8,19 @@ package org.lealone.test.orm;
 import java.util.List;
 
 import org.junit.Test;
-import org.lealone.test.UnitTestBase;
 import org.lealone.test.orm.generated.Customer;
 import org.lealone.test.orm.generated.CustomerAddress;
 import org.lealone.test.orm.generated.Order;
 
-public class OrmJoinTest extends UnitTestBase {
+public class OrmJoinTest extends OrmTestBase {
 
     @Test
     public void run() {
-        SqlScript.createCustomerTable(this);
-        SqlScript.createCustomerAddressTable(this);
-        SqlScript.createProductTable(this);
-        SqlScript.createOrderTable(this);
-        SqlScript.createOrderItemTable(this);
+        // SqlScript.createCustomerTable(this);
+        // SqlScript.createCustomerAddressTable(this);
+        // SqlScript.createProductTable(this);
+        // SqlScript.createOrderTable(this);
+        // SqlScript.createOrderItemTable(this);
 
         join();
     }

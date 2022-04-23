@@ -10,14 +10,13 @@ import java.lang.reflect.Method;
 import java.util.List;
 
 import org.junit.Test;
-import org.lealone.test.UnitTestBase;
 import org.lealone.test.orm.generated.User;
 
-public class OrmCrudTest extends UnitTestBase {
+public class OrmCrudTest extends OrmTestBase {
 
     @Test
     public void run() {
-        SqlScript.createUserTable(this);
+        // SqlScript.createUserTable(this);
         crud();
         json();
     }

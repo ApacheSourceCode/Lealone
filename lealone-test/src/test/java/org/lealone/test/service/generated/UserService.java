@@ -2,7 +2,6 @@ package org.lealone.test.service.generated;
 
 import java.sql.*;
 import org.lealone.client.ClientServiceProxy;
-import org.lealone.orm.json.JsonObject;
 import org.lealone.test.orm.generated.User;
 
 /**
@@ -12,13 +11,6 @@ import org.lealone.test.orm.generated.User;
  */
 public interface UserService {
 
-    static UserService create(String url) {
-        if (new org.lealone.db.ConnectionInfo(url).isEmbedded())
-            return new org.lealone.test.service.impl.UserServiceImpl();
-        else
-            return new ServiceProxy(url);
-    }
-
     Long add(User user);
 
     User find(String name);
@@ -26,6 +18,20 @@ public interface UserService {
     Integer update(User user);
 
     Integer delete(String name);
+
+    static UserService create() {
+        return create(null);
+    }
+
+    static UserService create(String url) {
+        if (url == null)
+            url = ClientServiceProxy.getUrl();
+
+        if (ClientServiceProxy.isEmbedded(url))
+            return new org.lealone.test.service.impl.UserServiceImpl();
+        else
+            return new ServiceProxy(url);
+    }
 
     static class ServiceProxy implements UserService {
 
@@ -44,10 +50,10 @@ public interface UserService {
         @Override
         public Long add(User user) {
             try {
-                ps1.setString(1, JsonObject.mapFrom(user).encode());
+                ps1.setString(1, user.encode());
                 ResultSet rs = ps1.executeQuery();
                 rs.next();
-                Long ret =  rs.getLong(1);
+                Long ret = rs.getLong(1);
                 rs.close();
                 return ret;
             } catch (Throwable e) {
@@ -61,9 +67,9 @@ public interface UserService {
                 ps2.setString(1, name);
                 ResultSet rs = ps2.executeQuery();
                 rs.next();
-                JsonObject jo = new JsonObject(rs.getString(1));
+                String ret = rs.getString(1);
                 rs.close();
-                return jo.mapTo(User.class);
+                return User.decode(ret);
             } catch (Throwable e) {
                 throw ClientServiceProxy.failed("USER_SERVICE.FIND", e);
             }
@@ -72,10 +78,10 @@ public interface UserService {
         @Override
         public Integer update(User user) {
             try {
-                ps3.setString(1, JsonObject.mapFrom(user).encode());
+                ps3.setString(1, user.encode());
                 ResultSet rs = ps3.executeQuery();
                 rs.next();
-                Integer ret =  rs.getInt(1);
+                Integer ret = rs.getInt(1);
                 rs.close();
                 return ret;
             } catch (Throwable e) {
@@ -89,7 +95,7 @@ public interface UserService {
                 ps4.setString(1, name);
                 ResultSet rs = ps4.executeQuery();
                 rs.next();
-                Integer ret =  rs.getInt(1);
+                Integer ret = rs.getInt(1);
                 rs.close();
                 return ret;
             } catch (Throwable e) {

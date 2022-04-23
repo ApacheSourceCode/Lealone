@@ -6,7 +6,6 @@
 package org.lealone.orm.property;
 
 import java.sql.Time;
-import java.util.Map;
 
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueTime;
@@ -14,63 +13,26 @@ import org.lealone.orm.Model;
 
 /**
  * Time property.
- *
- * @param <R> the root model bean type
  */
-public class PTime<R> extends PBaseNumber<R, Time> {
+public class PTime<M extends Model<M>> extends PBaseNumber<M, Time> {
 
-    private Time value;
-
-    /**
-     * Construct with a property name and root instance.
-     *
-     * @param name property name
-     * @param root the root model bean instance
-     */
-    public PTime(String name, R root) {
-        super(name, root);
-    }
-
-    private PTime<R> P(Model<?> model) {
-        return this.<PTime<R>> getModelProperty(model);
-    }
-
-    public final R set(Time value) {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).set(value);
-        }
-        if (!areEqual(this.value, value)) {
-            this.value = value;
-            expr().set(name, ValueTime.get(value));
-        }
-        return root;
+    public PTime(String name, M model) {
+        super(name, model);
     }
 
     @Override
-    public R set(Object value) {
-        return set(Time.valueOf(value.toString()));
+    protected Value createValue(Time value) {
+        return ValueTime.get(value);
     }
 
-    public final Time get() {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).get();
-        }
-        return value;
+    @Override
+    protected Object encodeValue() {
+        return value.getTime();
     }
 
     @Override
     protected void deserialize(Value v) {
         value = v.getTime();
-    }
-
-    @Override
-    protected void serialize(Map<String, Object> map) {
-        if (value != null)
-            map.put(getName(), value.getTime());
-        else
-            map.put(getName(), 0);
     }
 
     @Override

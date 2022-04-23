@@ -5,68 +5,27 @@
  */
 package org.lealone.orm.property;
 
-import java.util.Map;
-
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueShort;
 import org.lealone.orm.Model;
 
 /**
  * Short property.
- *
- * @param <R> the root model bean type
  */
-public class PShort<R> extends PBaseNumber<R, Short> {
+public class PShort<M extends Model<M>> extends PBaseNumber<M, Short> {
 
-    private short value;
-
-    /**
-     * Construct with a property name and root instance.
-     *
-     * @param name property name
-     * @param root the root model bean instance
-     */
-    public PShort(String name, R root) {
-        super(name, root);
-    }
-
-    private PShort<R> P(Model<?> model) {
-        return this.<PShort<R>> getModelProperty(model);
-    }
-
-    public final R set(short value) {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).set(value);
-        }
-        if (!areEqual(this.value, value)) {
-            this.value = value;
-            expr().set(name, ValueShort.get(value));
-        }
-        return root;
+    public PShort(String name, M model) {
+        super(name, model);
     }
 
     @Override
-    public R set(Object value) {
-        return set(Short.valueOf(value.toString()).shortValue());
-    }
-
-    public final short get() {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).get();
-        }
-        return value;
+    protected Value createValue(Short value) {
+        return ValueShort.get(value);
     }
 
     @Override
     protected void deserialize(Value v) {
         value = v.getShort();
-    }
-
-    @Override
-    protected void serialize(Map<String, Object> map) {
-        map.put(getName(), value);
     }
 
     @Override

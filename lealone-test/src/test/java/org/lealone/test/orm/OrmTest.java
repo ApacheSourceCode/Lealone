@@ -8,17 +8,16 @@ package org.lealone.test.orm;
 import java.util.List;
 
 import org.junit.Test;
-import org.lealone.test.UnitTestBase;
 import org.lealone.test.orm.generated.Customer;
 import org.lealone.test.orm.generated.Order;
 
-public class OrmTest extends UnitTestBase {
+public class OrmTest extends OrmTestBase {
 
     @Test
     public void run() {
         // 会自动生成Customer和Order两个模型类
-        SqlScript.createCustomerTable(this);
-        SqlScript.createOrderTable(this);
+        // SqlScript.createCustomerTable(this);
+        // SqlScript.createOrderTable(this);
 
         // insert
         new Customer().id.set(1001).name.set("rob").phone.set(12345678).insert();

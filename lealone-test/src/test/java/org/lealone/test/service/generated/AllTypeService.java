@@ -11,7 +11,6 @@ import java.sql.Timestamp;
 import java.util.UUID;
 import org.lealone.client.ClientServiceProxy;
 import org.lealone.db.value.ValueUuid;
-import org.lealone.orm.json.JsonObject;
 import org.lealone.test.orm.generated.User;
 
 /**
@@ -21,16 +20,23 @@ import org.lealone.test.orm.generated.User;
  */
 public interface AllTypeService {
 
+    User testType(Integer f1, Boolean f2, Byte f3, Short f4, Long f5, Long f6, BigDecimal f7, Double f8, Float f9, Time f10, Date f11, Timestamp f12, byte[] f13, Object f14, String f15, String f16, String f17, Blob f18, Clob f19, UUID f20, Array f21);
+
+    UUID testUuid(UUID f1);
+
+    static AllTypeService create() {
+        return create(null);
+    }
+
     static AllTypeService create(String url) {
-        if (new org.lealone.db.ConnectionInfo(url).isEmbedded())
+        if (url == null)
+            url = ClientServiceProxy.getUrl();
+
+        if (ClientServiceProxy.isEmbedded(url))
             return new org.lealone.test.service.impl.AllTypeServiceImpl();
         else
             return new ServiceProxy(url);
     }
-
-    User testType(Integer f1, Boolean f2, Byte f3, Short f4, Long f5, Long f6, BigDecimal f7, Double f8, Float f9, Time f10, Date f11, Timestamp f12, byte[] f13, Object f14, String f15, String f16, String f17, Blob f18, Clob f19, UUID f20, Array f21);
-
-    UUID testUuid(UUID f1);
 
     static class ServiceProxy implements AllTypeService {
 
@@ -68,9 +74,9 @@ public interface AllTypeService {
                 ps1.setArray(21, f21);
                 ResultSet rs = ps1.executeQuery();
                 rs.next();
-                JsonObject jo = new JsonObject(rs.getString(1));
+                String ret = rs.getString(1);
                 rs.close();
-                return jo.mapTo(User.class);
+                return User.decode(ret);
             } catch (Throwable e) {
                 throw ClientServiceProxy.failed("ALL_TYPE_SERVICE.TEST_TYPE", e);
             }

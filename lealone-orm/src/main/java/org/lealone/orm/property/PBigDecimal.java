@@ -6,7 +6,6 @@
 package org.lealone.orm.property;
 
 import java.math.BigDecimal;
-import java.util.Map;
 
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueDecimal;
@@ -14,49 +13,21 @@ import org.lealone.orm.Model;
 
 /**
  * BigDecimal property.
- * @param <R> the root model bean type
  */
-public class PBigDecimal<R> extends PBaseNumber<R, BigDecimal> {
+public class PBigDecimal<M extends Model<M>> extends PBaseNumber<M, BigDecimal> {
 
-    private BigDecimal value;
-
-    /**
-     * Construct with a property name and root instance.
-     *
-     * @param name property name
-     * @param root the root model bean instance
-     */
-    public PBigDecimal(String name, R root) {
-        super(name, root);
-    }
-
-    private PBigDecimal<R> P(Model<?> model) {
-        return this.<PBigDecimal<R>> getModelProperty(model);
-    }
-
-    public final R set(BigDecimal value) {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).set(value);
-        }
-        if (!areEqual(this.value, value)) {
-            this.value = value;
-            expr().set(name, ValueDecimal.get(value));
-        }
-        return root;
+    public PBigDecimal(String name, M model) {
+        super(name, model);
     }
 
     @Override
-    public R set(Object value) {
-        return set(new BigDecimal(value.toString()));
+    protected Value createValue(BigDecimal value) {
+        return ValueDecimal.get(value);
     }
 
-    public final BigDecimal get() {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).get();
-        }
-        return value;
+    @Override
+    protected Object encodeValue() {
+        return value.toString();
     }
 
     @Override
@@ -65,13 +36,7 @@ public class PBigDecimal<R> extends PBaseNumber<R, BigDecimal> {
     }
 
     @Override
-    protected void serialize(Map<String, Object> map) {
-        if (value != null)
-            map.put(getName(), value.toString());
-    }
-
-    @Override
     protected void deserialize(Object v) {
-        value = new BigDecimal(value.toString());
+        value = new BigDecimal(v.toString());
     }
 }

@@ -15,109 +15,25 @@ import org.lealone.db.value.Value;
 /**
  * A property used in type query.
  *
- * @param <R> The type of the owning root bean
+ * @param <M> the type of the owning model
  */
 @SuppressWarnings("unchecked")
-public abstract class ModelProperty<R> {
+public abstract class ModelProperty<M extends Model<M>> {
 
     protected final String name;
-    protected final R root;
+    protected final M model;
 
     protected String fullName;
 
     /**
-     * Construct with a property name and root instance.
+     * Construct with a property name and model instance.
      *
      * @param name the name of the property
-     * @param root the root model bean instance
+     * @param model the model instance
      */
-    public ModelProperty(String name, R root) {
+    public ModelProperty(String name, M model) {
         this.name = name;
-        this.root = root;
-    }
-
-    public String getDatabaseName() {
-        return ((Model<?>) root).getDatabaseName();
-    }
-
-    public String getSchemaName() {
-        return ((Model<?>) root).getSchemaName();
-    }
-
-    public String getTableName() {
-        return ((Model<?>) root).getTableName();
-    }
-
-    @Override
-    public String toString() {
-        return name;
-    }
-
-    protected Model<?> getModel() {
-        return ((Model<?>) root).maybeCopy();
-    }
-
-    protected <P> P getModelProperty(Model<?> model) {
-        return (P) model.getModelProperty(name);
-    }
-
-    private ModelProperty<R> P(Model<?> model) {
-        return this.<ModelProperty<R>> getModelProperty(model);
-    }
-
-    /**
-     * Internal method to return the underlying expression builder.
-     */
-    protected ExpressionBuilder<?> expr() {
-        return ((Model<?>) root).peekExprBuilder();
-    }
-
-    /**
-     * Is null.
-     */
-    public R isNull() {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).isNull();
-        }
-        expr().isNull(name);
-        return root;
-    }
-
-    /**
-     * Is not null.
-     */
-    public R isNotNull() {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).isNotNull();
-        }
-        expr().isNotNull(name);
-        return root;
-    }
-
-    /**
-     * Order by ascending on this property.
-     */
-    public R asc() {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).asc();
-        }
-        expr().orderBy(name, false);
-        return root;
-    }
-
-    /**
-     * Order by descending on this property.
-     */
-    public R desc() {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).desc();
-        }
-        expr().orderBy(name, true);
-        return root;
+        this.model = model;
     }
 
     /**
@@ -134,23 +50,81 @@ public abstract class ModelProperty<R> {
         return fullName;
     }
 
-    public final R eq(ModelProperty<?> p) {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).eq(p);
-        }
-        expr().eq(name, p);
-        return root;
+    protected String getDatabaseName() {
+        return model.getDatabaseName();
     }
 
-    public R set(Object value) {
-        return root;
+    protected String getSchemaName() {
+        return model.getSchemaName();
+    }
+
+    protected String getTableName() {
+        return model.getTableName();
+    }
+
+    @Override
+    public String toString() {
+        return name;
+    }
+
+    protected M getModel() {
+        return (M) model.maybeCopy();
+    }
+
+    protected <P> P getModelProperty(M model) {
+        return (P) model.getModelProperty(name);
+    }
+
+    /**
+     * Internal method to return the underlying expression builder.
+     */
+    protected ExpressionBuilder<M> expr() {
+        M m = getModel();
+        if (m != model) {
+            return m.peekExprBuilder();
+        }
+        return model.peekExprBuilder();
+    }
+
+    /**
+     * Is null.
+     */
+    public M isNull() {
+        return expr().isNull(name);
+    }
+
+    /**
+     * Is not null.
+     */
+    public M isNotNull() {
+        return expr().isNotNull(name);
+    }
+
+    /**
+     * Order by ascending on this property.
+     */
+    public M asc() {
+        return expr().orderBy(name, false);
+    }
+
+    /**
+     * Order by descending on this property.
+     */
+    public M desc() {
+        return expr().orderBy(name, true);
+    }
+
+    public final M eq(ModelProperty<?> p) {
+        return expr().eq(name, p);
     }
 
     protected void serialize(Map<String, Object> map) {
     }
 
     protected void deserialize(Object v) {
+    }
+
+    protected void deserializeAndSet(Object v) {
     }
 
     // map存放的是查询结果集某一条记录各个字段的值

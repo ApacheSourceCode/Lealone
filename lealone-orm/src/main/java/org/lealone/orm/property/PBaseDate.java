@@ -10,53 +10,33 @@ import org.lealone.orm.Model;
 /**
  * Base property for date and date time types.
  *
- * @param <R> the root model bean type
+ * @param <M> the type of the owning model
  * @param <D> the date time type
  */
 @SuppressWarnings("rawtypes")
-public abstract class PBaseDate<R, D extends Comparable> extends PBaseComparable<R, D> {
+public abstract class PBaseDate<M extends Model<M>, D extends Comparable> extends PBaseComparable<M, D> {
 
-    /**
-     * Construct with a property name and root instance.
-     *
-     * @param name property name
-     * @param root the root model bean instance
-     */
-    public PBaseDate(String name, R root) {
-        super(name, root);
-    }
-
-    private PBaseDate<R, D> P(Model<?> model) {
-        return this.<PBaseDate<R, D>> getModelProperty(model);
+    public PBaseDate(String name, M model) {
+        super(name, model);
     }
 
     /**
      * Same as greater than.
      *
      * @param value the equal to bind value
-     * @return the root model bean instance
+     * @return the model instance
      */
-    public R after(D value) {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).after(value);
-        }
-        expr().gt(name, value);
-        return root;
+    public M after(D value) {
+        return expr().gt(name, value);
     }
 
     /**
      * Same as less than.
      *
      * @param value the equal to bind value
-     * @return the root model bean instance
+     * @return the model instance
      */
-    public R before(D value) {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).before(value);
-        }
-        expr().lt(name, value);
-        return root;
+    public M before(D value) {
+        return expr().lt(name, value);
     }
 }

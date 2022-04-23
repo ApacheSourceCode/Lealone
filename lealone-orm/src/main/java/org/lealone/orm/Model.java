@@ -6,9 +6,9 @@
 package org.lealone.orm;
 
 import java.util.ArrayList;
-import java.util.EmptyStackException;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -26,7 +26,7 @@ import org.lealone.db.value.ValueInt;
 import org.lealone.db.value.ValueLong;
 import org.lealone.db.value.ValueNull;
 import org.lealone.orm.json.JsonObject;
-import org.lealone.orm.property.PBaseNumber;
+import org.lealone.orm.property.PLong;
 import org.lealone.sql.dml.Delete;
 import org.lealone.sql.dml.Insert;
 import org.lealone.sql.dml.Update;
@@ -41,17 +41,12 @@ import org.lealone.sql.query.Select;
 import org.lealone.transaction.Transaction;
 
 /**
- * Base root model bean.
- * <p>
- * With code generation for each table a model bean is created that extends this.
- * <p>
- * Provides common features for all root model beans
- * </p>
+ * 所有关系表会生成一个 Model 子类，这个类提供 crud 和 join 操作
  *
- * @param <T> the model bean type 
+ * @param <T> Model 子类
  */
-@SuppressWarnings("rawtypes")
-public abstract class Model<T> {
+@SuppressWarnings({ "rawtypes", "unchecked" })
+public abstract class Model<T extends Model<T>> {
 
     public static final short REGULAR_MODEL = 0;
     public static final short ROOT_DAO = 1;
@@ -62,40 +57,37 @@ public abstract class Model<T> {
     private static final ConcurrentSkipListMap<Long, ServerSession> currentSessions = new ConcurrentSkipListMap<>();
     private static final ConcurrentSkipListMap<Integer, List<ServerSession>> sessionMap = new ConcurrentSkipListMap<>();
 
-    private class PRowId extends PBaseNumber<T, Long> {
+    private static class Stack<E> {
 
-        private long value;
+        private final LinkedList<E> list = new LinkedList<>();
 
-        /**
-         * Construct with a property name and root instance.
-         *
-         * @param name property name
-         * @param root the root model bean instance
-         */
-        public PRowId(String name, T root) {
-            super(name, root);
+        public void push(E item) {
+            list.offerFirst(item);
         }
 
-        // 不需要通过外部设置
-        T set(long value) {
-            if (!areEqual(this.value, value)) {
-                this.value = value;
-                expr().set(name, ValueLong.get(value));
-            }
-            return root;
+        public E pop() {
+            return list.pollFirst();
         }
 
-        @Override
-        protected void deserialize(Value v) {
-            value = v.getLong();
+        public E peek() {
+            return list.peekFirst();
         }
 
-        public final long get() {
-            return value;
+        public boolean isEmpty() {
+            return list.isEmpty();
+        }
+
+        public int size() {
+            return list.size();
+        }
+
+        public E first() {
+            return list.peekLast();
         }
     }
 
     private static class NVPair {
+
         public final String name;
         public final Value value;
 
@@ -130,15 +122,28 @@ public abstract class Model<T> {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private final PRowId _rowid_ = new PRowId(Column.ROWID, (T) this);
+    private static class PRowId<M extends Model<M>> extends PLong<M> {
+        public PRowId(M root) {
+            super(Column.ROWID, root);
+        }
+
+        @Override
+        public Long get() {
+            return value == null ? 0 : value;
+        }
+    }
+
+    private final PRowId _rowid_ = new PRowId(this);
+
+    // The root model instance. Used to provide fluid query construction.
+    private final T root;
 
     private final ModelTable modelTable;
-
-    /**
-     * The root model bean instance. Used to provide fluid query construction.
-     */
-    private T root;
+    private short modelType; // 0: regular model; 1: root dao; 2: child dao
+    private ModelProperty[] modelProperties;
+    private ArrayList<Model<?>> modelList;
+    private HashMap<Class, ArrayList<Model<?>>> modelMap;
+    private HashMap<String, ModelProperty> nameToModelPropertyMap;
 
     // 以下字段不是必须的，所以延迟初始化，避免浪费不必要的内存
     private HashMap<String, NVPair> nvPairs;
@@ -150,22 +155,12 @@ public abstract class Model<T> {
     private Expression limitExpr;
     private Expression offsetExpr;
 
-    /**
-    * The underlying expression builders held as a stack. Pushed and popped based on and/or (conjunction/disjunction).
-    */
-    private ArrayStack<ExpressionBuilder<T>> expressionBuilderStack;
-
-    private ArrayStack<TableFilter> tableFilterStack;
-    private HashMap<String, ModelProperty> modelPropertiesMap;
-
-    ModelProperty[] modelProperties;
-    // 0: regular model; 1: root dao; 2: child dao
-    short modelType;
-
-    private ArrayList<Model<?>> modelList;
-    private HashMap<Class, ArrayList<Model<?>>> modelMap;
+    // The underlying expression builders held as a stack. Pushed and popped based on and/or.
+    private Stack<ExpressionBuilder<T>> expressionBuilderStack;
+    private Stack<TableFilter> tableFilterStack;
 
     protected Model(ModelTable table, short modelType) {
+        root = (T) this;
         this.modelTable = table;
         this.modelType = modelType;
     }
@@ -174,27 +169,36 @@ public abstract class Model<T> {
         return modelTable;
     }
 
+    public String getDatabaseName() {
+        return modelTable.getDatabaseName();
+    }
+
+    public String getSchemaName() {
+        return modelTable.getSchemaName();
+    }
+
+    public String getTableName() {
+        return modelTable.getTableName();
+    }
+
     public boolean isDao() {
         return modelType > 0;
     }
 
+    private boolean isRootDao() {
+        return modelType == ROOT_DAO;
+    }
+
     protected void setModelProperties(ModelProperty[] modelProperties) {
         this.modelProperties = modelProperties;
-        modelPropertiesMap = new HashMap<>(modelProperties.length);
+        nameToModelPropertyMap = new HashMap<>(modelProperties.length);
         for (ModelProperty p : modelProperties) {
-            modelPropertiesMap.put(p.getName(), p);
+            nameToModelPropertyMap.put(p.getName(), p);
         }
     }
 
     ModelProperty getModelProperty(String name) {
-        return modelPropertiesMap.get(name);
-    }
-
-    /**
-     * Sets the root model bean instance. Used to provide fluid query construction.
-     */
-    protected void setRoot(T root) {
-        this.root = root;
+        return nameToModelPropertyMap.get(name);
     }
 
     protected T addModel(Model<?> m) {
@@ -214,7 +218,6 @@ public abstract class Model<T> {
         return root;
     }
 
-    @SuppressWarnings("unchecked")
     protected <M> List<M> getModelList(Class c) {
         ArrayList<Model<?>> oldList = modelMap.get(c);
         if (oldList == null) {
@@ -250,7 +253,7 @@ public abstract class Model<T> {
 
     private ExpressionBuilder<T> getWhereExpressionBuilder() {
         if (whereExpressionBuilder == null) {
-            whereExpressionBuilder = new ExpressionBuilder<T>(this);
+            whereExpressionBuilder = new ExpressionBuilder<T>(root);
         }
         return whereExpressionBuilder;
     }
@@ -262,19 +265,6 @@ public abstract class Model<T> {
         return selectExpressions;
     }
 
-    public String getDatabaseName() {
-        return modelTable.getDatabaseName();
-    }
-
-    public String getSchemaName() {
-        return modelTable.getSchemaName();
-    }
-
-    public String getTableName() {
-        return modelTable.getTableName();
-    }
-
-    @SafeVarargs
     public final T select(ModelProperty<?>... properties) {
         Model<T> m = maybeCopy();
         if (m != this) {
@@ -298,7 +288,6 @@ public abstract class Model<T> {
         return root;
     }
 
-    @SafeVarargs
     public final T groupBy(ModelProperty<?>... properties) {
         Model<T> m = maybeCopy();
         if (m != this) {
@@ -332,7 +321,7 @@ public abstract class Model<T> {
             return m.having();
         }
         getStack().pop();
-        having = new ExpressionBuilder<>(this);
+        having = new ExpressionBuilder<>(root);
         pushExprBuilder(having);
         return root;
     }
@@ -353,41 +342,6 @@ public abstract class Model<T> {
         }
         peekExprBuilder().and();
         return root;
-    }
-
-    public void printSQL() {
-        StringBuilder sql = new StringBuilder();
-        sql.append("SELECT ");
-        if (selectExpressions != null) {
-            sql.append(selectExpressions.get(0).getSQL());
-            for (int i = 1, size = selectExpressions.size(); i < size; i++)
-                sql.append(", ").append(selectExpressions.get(i).getSQL());
-        } else {
-            sql.append("*");
-        }
-        sql.append(" FROM ").append(modelTable.getTableName());
-        if (whereExpressionBuilder != null) {
-            sql.append("\r\n  WHERE ").append(whereExpressionBuilder.getExpression().getSQL());
-        }
-        if (groupExpressions != null) {
-            sql.append("\r\n  GROUP BY (").append(groupExpressions.get(0).getSQL());
-            for (int i = 1, size = groupExpressions.size(); i < size; i++)
-                sql.append(", ").append(groupExpressions.get(i).getSQL());
-            sql.append(")");
-            if (having != null) {
-                sql.append(" HAVING ").append(having.getExpression().getSQL());
-            }
-        }
-        if (whereExpressionBuilder != null) {
-            ArrayList<SelectOrderBy> list = whereExpressionBuilder.getOrderList();
-            if (list != null && !list.isEmpty()) {
-                sql.append("\r\n  ORDER BY (").append(list.get(0).getSQL());
-                for (int i = 1, size = list.size(); i < size; i++)
-                    sql.append(", ").append(list.get(i).getSQL());
-                sql.append(")");
-            }
-        }
-        System.out.println(sql);
     }
 
     public T not() {
@@ -427,7 +381,7 @@ public abstract class Model<T> {
     }
 
     /**
-     * Execute the query returning either a single bean or null (if no matching bean is found).
+     * Execute the query returning either a single model or null (if no matching model is found).
      */
     public T findOne() {
         return findOne(null);
@@ -506,7 +460,6 @@ public abstract class Model<T> {
         return select;
     }
 
-    @SuppressWarnings("unchecked")
     private T deserialize(Result result, HashMap<Long, Model> models, ArrayList<T> list) {
         Value[] row = result.currentRow();
         if (row == null)
@@ -541,7 +494,6 @@ public abstract class Model<T> {
         return (T) m;
     }
 
-    @SuppressWarnings("unchecked")
     private void deserializeAssociateInstances(HashMap<String, Value> map, List<Model<?>> associateModels) {
         if (associateModels != null) {
             for (Model associateModel : associateModels) {
@@ -562,7 +514,7 @@ public abstract class Model<T> {
         return null;
     }
 
-    private Map<String, Object> toMap() {
+    public Map<String, Object> toMap() {
         Map<String, Object> map = new LinkedHashMap<>();
         for (ModelProperty<?> p : modelProperties) {
             p.serialize(map);
@@ -577,22 +529,21 @@ public abstract class Model<T> {
     }
 
     public String encode() {
-        return new JsonObject(toMap()).toString();
+        return new JsonObject(toMap()).encode();
     }
 
-    @SuppressWarnings("unchecked")
     protected T decode0(String str) {
         Map<String, Object> map = new JsonObject(str).getMap();
         for (ModelProperty<?> p : modelProperties) {
             Object v = map.get(p.getName());
-            if (v != null)
-                p.deserialize(v);
+            if (v != null) {
+                // 先反序列化再set，这样Model的子类对象就可以在后续调用insert之类的方法
+                p.deserializeAndSet(v);
+            }
         }
         Object v = map.get("modelType");
         if (v == null) {
-            modelType = Model.REGULAR_MODEL;
-            // 如果不通过JsonSerializer得到的json串不一定包含isDao字段(比如前端直接传来的json串)，所以不抛异常
-            // DbException.throwInternalError("The isDao field is missing");
+            modelType = REGULAR_MODEL;
         } else {
             modelType = ((Number) v).shortValue();
         }
@@ -622,13 +573,12 @@ public abstract class Model<T> {
         return list;
     }
 
-    @SuppressWarnings("unchecked")
-    public <M> M m(Model<M> m) {
+    public <M extends Model<M>> M m(Model<M> m) {
         Model<T> m2 = maybeCopy();
         if (m2 != this) {
             return m2.m(m);
         }
-        Model<T> old = (Model<T>) peekExprBuilder().getOldModel();
+        Model<T> old = peekExprBuilder().getOldModel();
         if (!old.isRootDao() && m.getClass() == old.getClass()) {
             m = (Model<M>) old;
         } else {
@@ -637,7 +587,7 @@ public abstract class Model<T> {
                 m = m3;
             }
         }
-        peekExprBuilder().setModel(m);
+        peekExprBuilder().setModel((T) m);
         m.pushExprBuilder((ExpressionBuilder<M>) peekExprBuilder());
         return m.root;
     }
@@ -797,11 +747,6 @@ public abstract class Model<T> {
         }
     }
 
-    private boolean isRootDao() {
-        return modelType == ROOT_DAO;
-    }
-
-    @SuppressWarnings("unchecked")
     Model<T> maybeCopy() {
         if (isRootDao()) {
             return newInstance(modelTable.copy(), CHILD_DAO);
@@ -836,22 +781,22 @@ public abstract class Model<T> {
         }
     }
 
-    private ArrayStack<ExpressionBuilder<T>> getStack() {
+    private Stack<ExpressionBuilder<T>> getStack() {
         if (expressionBuilderStack == null) {
-            expressionBuilderStack = new ArrayStack<ExpressionBuilder<T>>();
+            expressionBuilderStack = new Stack<ExpressionBuilder<T>>();
             expressionBuilderStack.push(getWhereExpressionBuilder());
         }
         return expressionBuilderStack;
     }
 
-    TableFilter createTableFilter() {
+    private TableFilter createTableFilter() {
         return new TableFilter(modelTable.getSession(), modelTable.getTable(), null, true, null);
     }
 
-    private ArrayStack<TableFilter> getTableFilterStack() {
+    private Stack<TableFilter> getTableFilterStack() {
         if (tableFilterStack == null) {
             TableFilter tableFilter = createTableFilter();
-            tableFilterStack = new ArrayStack<>();
+            tableFilterStack = new Stack<>();
             tableFilterStack.push(tableFilter);
         }
         return tableFilterStack;
@@ -870,11 +815,6 @@ public abstract class Model<T> {
      */
     ExpressionBuilder<T> peekExprBuilder() {
         return getStack().peek();
-    }
-
-    @Override
-    public String toString() {
-        return new JsonObject(toMap()).encodePrettily();
     }
 
     public T limit(long v) {
@@ -903,7 +843,7 @@ public abstract class Model<T> {
         if (m != this) {
             return m.lp();
         }
-        ExpressionBuilder<T> e = new ExpressionBuilder<>(this);
+        ExpressionBuilder<T> e = new ExpressionBuilder<>(root);
         pushExprBuilder(e);
         return root;
     }
@@ -937,7 +877,7 @@ public abstract class Model<T> {
         if (m != this) {
             return m.on();
         }
-        ExpressionBuilder<T> e = new ExpressionBuilder<>(this);
+        ExpressionBuilder<T> e = new ExpressionBuilder<>(root);
         pushExprBuilder(e);
         return root;
     }
@@ -1039,96 +979,43 @@ public abstract class Model<T> {
         return Thread.currentThread().hashCode();
     }
 
-    /**
-    * Stack based on ArrayList.
-    *
-    * @author rbygrave
-    */
-    static class ArrayStack<E> {
+    @Override
+    public String toString() {
+        return new JsonObject(toMap()).encodePrettily();
+    }
 
-        private final List<E> list;
-
-        /**
-        * Creates an empty Stack with an initial size.
-        */
-        public ArrayStack(int size) {
-            this.list = new ArrayList<>(size);
+    public void printSQL() {
+        StringBuilder sql = new StringBuilder();
+        sql.append("SELECT ");
+        if (selectExpressions != null) {
+            sql.append(selectExpressions.get(0).getSQL());
+            for (int i = 1, size = selectExpressions.size(); i < size; i++)
+                sql.append(", ").append(selectExpressions.get(i).getSQL());
+        } else {
+            sql.append("*");
         }
-
-        /**
-        * Creates an empty Stack.
-        */
-        public ArrayStack() {
-            this.list = new ArrayList<>();
+        sql.append(" FROM ").append(modelTable.getTableName());
+        if (whereExpressionBuilder != null) {
+            sql.append("\r\n  WHERE ").append(whereExpressionBuilder.getExpression().getSQL());
         }
-
-        @Override
-        public String toString() {
-            return list.toString();
-        }
-
-        /**
-        * Pushes an item onto the top of this stack.
-        */
-        public void push(E item) {
-            list.add(item);
-        }
-
-        /**
-        * Removes the object at the top of this stack and returns that object as
-        * the value of this function.
-        */
-        public E pop() {
-            int len = list.size();
-            if (len == 0) {
-                throw new EmptyStackException();
+        if (groupExpressions != null) {
+            sql.append("\r\n  GROUP BY (").append(groupExpressions.get(0).getSQL());
+            for (int i = 1, size = groupExpressions.size(); i < size; i++)
+                sql.append(", ").append(groupExpressions.get(i).getSQL());
+            sql.append(")");
+            if (having != null) {
+                sql.append(" HAVING ").append(having.getExpression().getSQL());
             }
-            return list.remove(len - 1);
         }
-
-        private E peekZero(boolean retNull) {
-            int len = list.size();
-            if (len == 0) {
-                if (retNull) {
-                    return null;
-                }
-                throw new EmptyStackException();
+        if (whereExpressionBuilder != null) {
+            ArrayList<SelectOrderBy> list = whereExpressionBuilder.getOrderList();
+            if (list != null && !list.isEmpty()) {
+                sql.append("\r\n  ORDER BY (").append(list.get(0).getSQL());
+                for (int i = 1, size = list.size(); i < size; i++)
+                    sql.append(", ").append(list.get(i).getSQL());
+                sql.append(")");
             }
-            return list.get(len - 1);
         }
-
-        /**
-        * Returns the object at the top of this stack without removing it.
-        */
-        public E peek() {
-            return peekZero(false);
-        }
-
-        /**
-        * Returns the object at the top of this stack without removing it.
-        * If the stack is empty this returns null.
-        */
-        public E peekWithNull() {
-            return peekZero(true);
-        }
-
-        /**
-        * Tests if this stack is empty.
-        */
-        public boolean isEmpty() {
-            return list.isEmpty();
-        }
-
-        public int size() {
-            return list.size();
-        }
-
-        public E first() {
-            int len = list.size();
-            if (len == 0) {
-                throw new EmptyStackException();
-            }
-            return list.get(0);
-        }
+        System.out.println(sql);
     }
 }

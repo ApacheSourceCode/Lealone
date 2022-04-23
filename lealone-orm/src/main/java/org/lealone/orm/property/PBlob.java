@@ -7,42 +7,31 @@ package org.lealone.orm.property;
 
 import java.sql.Blob;
 import java.sql.SQLException;
-import java.util.Map;
 
 import org.lealone.common.exceptions.DbException;
 import org.lealone.db.value.ReadonlyBlob;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueBytes;
-import org.lealone.db.value.ValueJavaObject;
 import org.lealone.orm.Model;
-import org.lealone.orm.ModelProperty;
 
-public class PBlob<R> extends ModelProperty<R> {
+public class PBlob<M extends Model<M>> extends PBase<M, Blob> {
 
-    private Blob value;
-
-    public PBlob(String name, R root) {
-        super(name, root);
+    public PBlob(String name, M model) {
+        super(name, model);
     }
 
-    private PBlob<R> P(Model<?> model) {
-        return this.<PBlob<R>> getModelProperty(model);
+    @Override
+    protected Value createValue(Blob value) {
+        return ValueBytes.getNoCopy((byte[]) encodeValue());
     }
 
-    public R set(Blob value) {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).set(value);
+    @Override
+    protected Object encodeValue() {
+        try {
+            return value.getBytes(1, (int) value.length());
+        } catch (SQLException e) {
+            throw DbException.convert(e);
         }
-        if (!areEqual(this.value, value)) {
-            this.value = value;
-            expr().set(name, ValueJavaObject.getNoCopy(value, null));
-        }
-        return root;
-    }
-
-    public final Blob get() {
-        return value;
     }
 
     @Override
@@ -51,18 +40,12 @@ public class PBlob<R> extends ModelProperty<R> {
     }
 
     @Override
-    protected void serialize(Map<String, Object> map) {
-        if (value != null) {
-            try {
-                map.put(getName(), value.getBytes(0, (int) value.length()));
-            } catch (SQLException e) {
-                throw DbException.convert(e);
-            }
-        }
-    }
-
-    @Override
     protected void deserialize(Object v) {
-        value = new ReadonlyBlob(ValueBytes.get((byte[]) v));
+        byte[] bytes;
+        if (v instanceof byte[])
+            bytes = (byte[]) v;
+        else
+            bytes = v.toString().getBytes();
+        value = new ReadonlyBlob(ValueBytes.get(bytes));
     }
 }

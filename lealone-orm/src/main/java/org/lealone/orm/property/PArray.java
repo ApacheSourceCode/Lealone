@@ -5,75 +5,54 @@
  */
 package org.lealone.orm.property;
 
+import java.sql.Array;
+import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 
+import org.lealone.common.exceptions.DbException;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueArray;
 import org.lealone.db.value.ValueString;
 import org.lealone.orm.Model;
-import org.lealone.orm.ModelProperty;
 
 /**
- * Array property with E as the element type.
- *
- * @param <R> the root model bean type
+ * Array property.
  */
-public class PArray<R> extends ModelProperty<R> {
+public class PArray<M extends Model<M>> extends PBase<M, Object[]> {
 
-    private Object[] values;
-
-    /**
-     * Construct with a property name and root instance.
-     *
-     * @param name property name
-     * @param root the root model bean instance
-     */
-    public PArray(String name, R root) {
-        super(name, root);
+    public PArray(String name, M model) {
+        super(name, model);
     }
 
-    private PArray<R> P(Model<?> model) {
-        return this.<PArray<R>> getModelProperty(model);
-    }
-
-    public final R set(Object[] values) {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).set(values);
+    public M set(Array value) {
+        try {
+            return set((Object[]) value.getArray());
+        } catch (SQLException e) {
+            throw DbException.convert(e);
         }
-        if (!areEqual(this.values, values)) {
-            this.values = values;
-            Value[] array = new Value[values.length];
-            for (int i = 0; i < values.length; i++) {
-                array[i] = ValueString.get(values[i].toString());
-            }
-            expr().set(name, ValueArray.get(array));
-        }
-        return root;
-    }
-
-    public final Object[] get() {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).get();
-        }
-        return values;
     }
 
     @Override
-    protected void serialize(Map<String, Object> map) {
-        if (values != null)
-            map.put(getName(), Arrays.asList(values));
+    protected Value createValue(Object[] values) {
+        Value[] array = new Value[values.length];
+        for (int i = 0; i < values.length; i++) {
+            array[i] = ValueString.get(values[i].toString());
+        }
+        return ValueArray.get(array);
+    }
+
+    @Override
+    protected Object encodeValue() {
+        return Arrays.asList(value);
     }
 
     @Override
     protected void deserialize(Object v) {
         if (v instanceof List)
-            values = ((List<?>) v).toArray();
+            value = ((List<?>) v).toArray();
         else if (v instanceof Object[])
-            values = (Object[]) v;
+            value = (Object[]) v;
     }
 
     @Override
@@ -86,93 +65,41 @@ public class PArray<R> extends ModelProperty<R> {
             for (int i = 0; i < length; i++) {
                 values[i] = list[i].getObject();
             }
-            this.values = values;
+            this.value = values;
         }
     }
 
     /**
      * ARRAY contains the values.
-     * <p>
-     * <pre>{@code
-     *
-     *   new QContact()
-     *    .phoneNumbers.contains("4321")
-     *    .findList();
-     *
-     * }</pre>
      *
      * @param values The values that should be contained in the array
      */
     @SafeVarargs
-    public final R contains(Object... values) {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).contains(values);
-        }
-        expr().arrayContains(name, values);
-        return root;
+    public final M contains(Object... values) {
+        return expr().arrayContains(name, values);
     }
 
     /**
      * ARRAY does not contain the values.
-     * <p>
-     * <pre>{@code
-     *
-     *   new QContact()
-     *    .phoneNumbers.notContains("4321")
-     *    .findList();
-     *
-     * }</pre>
      *
      * @param values The values that should not be contained in the array
      */
     @SafeVarargs
-    public final R notContains(Object... values) {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).notContains(values);
-        }
-        expr().arrayNotContains(name, values);
-        return root;
+    public final M notContains(Object... values) {
+        return expr().arrayNotContains(name, values);
     }
 
     /**
      * ARRAY is empty.
-     * <p>
-     * <pre>{@code
-     *
-     *   new QContact()
-     *    .phoneNumbers.isEmpty()
-     *    .findList();
-     *
-     * }</pre>
      */
-    public R isEmpty() {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).isEmpty();
-        }
-        expr().arrayIsEmpty(name);
-        return root;
+    public M isEmpty() {
+        return expr().arrayIsEmpty(name);
     }
 
     /**
      * ARRAY is not empty.
-     * <p>
-     * <pre>{@code
-     *
-     *   new QContact()
-     *    .phoneNumbers.isNotEmpty()
-     *    .findList();
-     *
-     * }</pre>
      */
-    public R isNotEmpty() {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).isNotEmpty();
-        }
-        expr().arrayIsNotEmpty(name);
-        return root;
+    public M isNotEmpty() {
+        return expr().arrayIsNotEmpty(name);
     }
 }

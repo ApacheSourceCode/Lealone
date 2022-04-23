@@ -180,10 +180,12 @@ public class CreateService extends SchemaStatement {
                 }
             }
         }
-
         // 最后才创建执行器，此时implementBy肯定存在了
-        ServiceExecutor executor = factory.createServiceExecutor(service);
-        service.setExecutor(executor);
+        // 如果没有提前生成ServiceExecutor才去使用JavaServiceExecutor
+        if (!genCode) {
+            ServiceExecutor executor = factory.createServiceExecutor(service);
+            service.setExecutor(executor);
+        }
         return 0;
     }
 
@@ -295,9 +297,8 @@ public class CreateService extends SchemaStatement {
                 methodSignatureBuff.append(cType).append(" ").append(cName);
                 proxyMethodBodyBuff.append("                ").append(psVarName).append(".");
                 if (c.getTable() != null) {
-                    importSet.add("org.lealone.orm.json.JsonObject");
-                    proxyMethodBodyBuff.append("setString(").append(i + 1).append(", JsonObject.mapFrom(").append(cName)
-                            .append(").encode());\r\n");
+                    proxyMethodBodyBuff.append("setString(").append(i + 1).append(", ").append(cName)
+                            .append(".encode());\r\n");
                 } else {
                     proxyMethodBodyBuff.append(getPreparedStatementSetterMethodName(cType)).append("(").append(i + 1)
                             .append(", ");
@@ -322,11 +323,10 @@ public class CreateService extends SchemaStatement {
                 proxyMethodBodyBuff.append("                rs.next();\r\n");
 
                 if (returnColumn.getTable() != null) {
-                    importSet.add("org.lealone.orm.json.JsonObject");
-                    proxyMethodBodyBuff.append("                JsonObject jo = new JsonObject(rs.getString(1));\r\n");
+                    proxyMethodBodyBuff.append("                String ret = rs.getString(1);\r\n");
                     proxyMethodBodyBuff.append("                rs.close();\r\n");
-                    proxyMethodBodyBuff.append("                return jo.mapTo(").append(returnType)
-                            .append(".class);\r\n");
+                    proxyMethodBodyBuff.append("                return ").append(returnType)
+                            .append(".decode(ret);\r\n");
                 } else {
                     proxyMethodBodyBuff.append("                ").append(returnType).append(" ret = ");
                     if (returnType.toUpperCase().equals("UUID")) {
@@ -335,7 +335,7 @@ public class CreateService extends SchemaStatement {
                         proxyMethodBodyBuff.append("ValueUuid.get(rs.").append(getResultSetReturnMethodName(returnType))
                                 .append("(1)).getUuid();\r\n");
                     } else {
-                        proxyMethodBodyBuff.append(" rs.").append(getResultSetReturnMethodName(returnType))
+                        proxyMethodBodyBuff.append("rs.").append(getResultSetReturnMethodName(returnType))
                                 .append("(1);\r\n");
                     }
                     proxyMethodBodyBuff.append("                rs.close();\r\n");
@@ -371,18 +371,27 @@ public class CreateService extends SchemaStatement {
         String serviceInterfaceName = toClassName(serviceName);
         buff.append("public interface ").append(serviceInterfaceName).append(" {\r\n");
         buff.append("\r\n");
+
+        // 生成服务接口方法
+        for (StringBuilder m : methodSignatureList) {
+            buff.append("    ").append(m).append(";\r\n");
+            buff.append("\r\n");
+        }
+
+        // 生成两个static create方法
+        buff.append("    static ").append(serviceInterfaceName).append(" create() {\r\n");
+        buff.append("        return create(null);\r\n");
+        buff.append("    }\r\n");
+        buff.append("\r\n");
         buff.append("    static ").append(serviceInterfaceName).append(" create(String url) {\r\n");
-        buff.append("        if (new org.lealone.db.ConnectionInfo(url).isEmbedded())\r\n");
+        buff.append("        if (url == null)\r\n");
+        buff.append("            url = ClientServiceProxy.getUrl();\r\n");
+        buff.append("\r\n");
+        buff.append("        if (ClientServiceProxy.isEmbedded(url))\r\n");
         buff.append("            return new ").append(getServiceImplementClassName()).append("();\r\n");
         buff.append("        else\r\n");
         buff.append("            return new ServiceProxy(url);\r\n");
         buff.append("    }\r\n");
-
-        // 生成服务接口方法
-        for (StringBuilder m : methodSignatureList) {
-            buff.append("\r\n");
-            buff.append("    ").append(m).append(";\r\n");
-        }
 
         // 生成Service Proxy类
         buff.append("\r\n");
@@ -475,7 +484,7 @@ public class CreateService extends SchemaStatement {
         for (int i = 0; i < methodSize; i++) {
             buff.append("\r\n");
             if (genCode)
-                buff.append(" @Override\r\n");
+                buff.append("    @Override\r\n");
             buff.append("    public ").append(methodSignatureList.get(i)).append(" {\r\n");
             if (!methodReturnTypeList.get(i).equals("void"))
                 buff.append("        return null;\r\n");
@@ -560,8 +569,7 @@ public class CreateService extends SchemaStatement {
             buff.append("            if (").append(resultVarName).append(" == null)\r\n");
             buff.append("                return null;\r\n");
             if (returnColumn.getTable() != null) {
-                importSet.add("org.lealone.orm.json.JsonObject");
-                buff.append("            return JsonObject.mapFrom(").append(resultVarName).append(").encode();\r\n");
+                buff.append("            return ").append(resultVarName).append(".encode();\r\n");
             } else if (!returnType.equalsIgnoreCase("string")) {
                 buff.append("            return ").append(resultVarName).append(".toString();\r\n");
             } else {
@@ -579,9 +587,8 @@ public class CreateService extends SchemaStatement {
         protected void genVarInitCode(StringBuilder buff, TreeSet<String> importSet, Column c, String cType,
                 int cIndex) {
             if (c.getTable() != null) {
-                importSet.add("org.lealone.orm.json.JsonObject");
-                buff.append(" new JsonObject(").append("methodArgs[").append(cIndex).append("].getString()).mapTo(")
-                        .append(cType).append(".class);\r\n");
+                buff.append(cType).append(".decode(").append("methodArgs[").append(cIndex)
+                        .append("].getString());\r\n");
             } else {
                 buff.append("methodArgs[").append(cIndex).append("].").append(getValueMethodName(cType))
                         .append("();\r\n");
@@ -594,9 +601,7 @@ public class CreateService extends SchemaStatement {
             buff.append("            if (").append(resultVarName).append(" == null)\r\n");
             buff.append("                return ValueNull.INSTANCE;\r\n");
             if (returnColumn.getTable() != null) {
-                importSet.add("org.lealone.orm.json.JsonObject");
-                buff.append("            return ValueString.get(JsonObject.mapFrom(").append(resultVarName)
-                        .append(").encode());\r\n");
+                buff.append("            return ValueString.get(").append(resultVarName).append(".encode());\r\n");
             } else {
                 buff.append("            return ").append(getReturnMethodName(returnType)).append("(")
                         .append(resultVarName).append(")").append(";\r\n");
@@ -614,9 +619,8 @@ public class CreateService extends SchemaStatement {
         protected void genVarInitCode(StringBuilder buff, TreeSet<String> importSet, Column c, String cType,
                 int cIndex) {
             if (c.getTable() != null) {
-                importSet.add("org.lealone.orm.json.JsonObject");
-                buff.append(" new JsonObject(").append("ServiceExecutor.toString(\"").append(c.getName())
-                        .append("\", methodArgs)).mapTo(").append(cType).append(".class);\r\n");
+                buff.append(cType).append(".decode(").append("ServiceExecutor.toString(\"").append(c.getName())
+                        .append("\", methodArgs));\r\n");
             } else {
                 switch (cType.toUpperCase()) {
                 case "STRING":
@@ -648,7 +652,6 @@ public class CreateService extends SchemaStatement {
         }
     }
 
-    @SuppressWarnings("unused")
     private void genServiceExecutorCode() {
         TreeSet<String> importSet = new TreeSet<>();
         importSet.add(ServiceExecutor.class.getName());
@@ -888,21 +891,17 @@ public class CreateService extends SchemaStatement {
             return null;
         case "UNKNOWN": // anything
         case "OBJECT":
-            return "ja.getJsonObject(" + i + ")";
+            return "ja.getValue(" + i + ")";
         case "BLOB":
-            type0 = "java.sql.Blob";
-            break;
+            return "new org.lealone.db.value.ReadonlyBlob(ja.getString(" + i + "))";
         case "CLOB":
-            type0 = "java.sql.Clob";
-            break;
+            return "new org.lealone.db.value.ReadonlyClob(ja.getString(" + i + "))";
         case "ARRAY":
-            type0 = "java.sql.Array";
-            break;
+            return "new org.lealone.db.value.ReadonlyArray(ja.getString(" + i + "))";
         case "RESULT_SET":
-            type0 = "java.sql.ResultSet";
-            break;
+            return "ja.getValue(" + i + ")";
         }
-        return "ja.getJsonObject(" + i + ").mapTo(" + type0 + ".class)";
+        return type0 + ".decode(ja.getString(" + i + "))";
     }
 
     // 根据具体类型调用合适的Map方法

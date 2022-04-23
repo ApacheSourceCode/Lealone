@@ -10,24 +10,14 @@ import org.lealone.orm.Model;
 /**
  * Base property for number types.
  *
- * @param <R> the root model bean type
+ * @param <M> the type of the owning model
  * @param <T> the number type
  */
 @SuppressWarnings("rawtypes")
-public abstract class PBaseNumber<R, T extends Comparable> extends PBaseComparable<R, T> {
+public abstract class PBaseNumber<M extends Model<M>, T extends Comparable> extends PBaseComparable<M, T> {
 
-    /**
-     * Construct with a property name and root instance.
-     *
-     * @param name property name
-     * @param root the root model bean instance
-     */
-    public PBaseNumber(String name, R root) {
-        super(name, root);
-    }
-
-    private PBaseNumber<R, T> P(Model<?> model) {
-        return this.<PBaseNumber<R, T>> getModelProperty(model);
+    public PBaseNumber(String name, M model) {
+        super(name, model);
     }
 
     // Additional int versions -- seems the right thing to do
@@ -36,45 +26,30 @@ public abstract class PBaseNumber<R, T extends Comparable> extends PBaseComparab
      * Is equal to.
      *
      * @param value the equal to bind value
-     * @return the root model bean instance
+     * @return the model instance
      */
-    public R eq(int value) {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).eq(value);
-        }
-        expr().eq(name, value);
-        return root;
+    public M eq(int value) {
+        return expr().eq(name, value);
     }
 
     /**
      * Greater than.
      *
      * @param value the equal to bind value
-     * @return the root model bean instance
+     * @return the model instance
      */
-    public R gt(int value) {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).gt(value);
-        }
-        expr().gt(name, value);
-        return root;
+    public M gt(int value) {
+        return expr().gt(name, value);
     }
 
     /**
      * Less than.
      *
      * @param value the equal to bind value
-     * @return the root model bean instance
+     * @return the model instance
      */
-    public R lt(int value) {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).lt(value);
-        }
-        expr().lt(name, value);
-        return root;
+    public M lt(int value) {
+        return expr().lt(name, value);
     }
 
     /**
@@ -82,14 +57,9 @@ public abstract class PBaseNumber<R, T extends Comparable> extends PBaseComparab
      *
      * @param lower the lower bind value
      * @param upper the upper bind value
-     * @return the root model bean instance
+     * @return the model instance
      */
-    public R between(int lower, int upper) {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).between(lower, upper);
-        }
-        expr().between(name, lower, upper);
-        return root;
+    public M between(int lower, int upper) {
+        return expr().between(name, lower, upper);
     }
 }

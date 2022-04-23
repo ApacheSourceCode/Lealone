@@ -5,68 +5,27 @@
  */
 package org.lealone.orm.property;
 
-import java.util.Map;
-
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueFloat;
 import org.lealone.orm.Model;
 
 /**
- * Float property.
- *
- * @param <R> the root model bean type
+ * Float property. 
  */
-public class PFloat<R> extends PBaseNumber<R, Float> {
+public class PFloat<M extends Model<M>> extends PBaseNumber<M, Float> {
 
-    private float value;
-
-    /**
-     * Construct with a property name and root instance.
-     *
-     * @param name property name
-     * @param root the root model bean instance
-     */
-    public PFloat(String name, R root) {
-        super(name, root);
-    }
-
-    private PFloat<R> P(Model<?> model) {
-        return this.<PFloat<R>> getModelProperty(model);
-    }
-
-    public final R set(float value) {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).set(value);
-        }
-        if (!areEqual(this.value, value)) {
-            this.value = value;
-            expr().set(name, ValueFloat.get(value));
-        }
-        return root;
+    public PFloat(String name, M model) {
+        super(name, model);
     }
 
     @Override
-    public R set(Object value) {
-        return set(Float.valueOf(value.toString()).floatValue());
-    }
-
-    public final float get() {
-        Model<?> model = getModel();
-        if (model != root) {
-            return P(model).get();
-        }
-        return value;
+    protected Value createValue(Float value) {
+        return ValueFloat.get(value);
     }
 
     @Override
     protected void deserialize(Value v) {
         value = v.getFloat();
-    }
-
-    @Override
-    protected void serialize(Map<String, Object> map) {
-        map.put(getName(), value);
     }
 
     @Override

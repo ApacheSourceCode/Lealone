@@ -53,7 +53,11 @@ public class Shell {
     private Statement stat;
     private boolean listMode;
     private int maxColumnSize = 100;
-    private String url, user, password;
+    private String url, user = "root", password;
+    private String host = Constants.DEFAULT_HOST;
+    private String port = Constants.DEFAULT_TCP_PORT + "";
+    private String database = "lealone";
+    private boolean embedded;
 
     public static void main(String[] args) {
         Shell shell = new Shell(args);
@@ -66,7 +70,7 @@ public class Shell {
         }
     }
 
-    private Shell(String[] args) {
+    Shell(String[] args) {
         this.args = args;
     }
 
@@ -76,12 +80,18 @@ public class Shell {
             String arg = args[i].trim();
             if (arg.isEmpty())
                 continue;
-            if (arg.equals("-url")) {
+            if (arg.equals("-host")) {
+                host = args[++i];
+            } else if (arg.equals("-port")) {
+                port = args[++i];
+            } else if (arg.equals("-url")) {
                 url = args[++i];
             } else if (arg.equals("-user")) {
                 user = args[++i];
             } else if (arg.equals("-password")) {
                 password = args[++i];
+            } else if (arg.equals("-database")) {
+                database = args[++i];
             } else if (arg.equals("-sql")) {
                 sql = args[++i];
             } else if (arg.equals("-help") || arg.equals("-?")) {
@@ -89,15 +99,33 @@ public class Shell {
                 return;
             } else if (arg.equals("-list")) {
                 listMode = true;
+            } else if (arg.equals("-embed")) {
+                embedded = true;
+            } else if (arg.equals("-client") || arg.equals("-debug")) {
+                continue;
             } else {
                 showUsage();
                 return;
             }
         }
+
         showWelcome();
         if (url == null) {
-            readConnectionArgs();
+            StringBuilder buff = new StringBuilder(100);
+            buff.append(Constants.URL_PREFIX);
+            if (embedded) {
+                buff.append(Constants.URL_EMBED);
+            } else {
+                buff.append(Constants.URL_TCP).append("//");
+                buff.append(host).append(":").append(port).append('/');
+            }
+            buff.append(database);
+            url = buff.toString();
+            // readConnectionArgs();
         }
+        println("Connect to " + url);
+        // println();
+
         connect();
         if (sql != null) {
             executeSqlScript(sql);
@@ -106,21 +134,22 @@ public class Shell {
         }
     }
 
+    @SuppressWarnings("unused")
     private void readConnectionArgs() throws Exception {
         StringBuilder buff = new StringBuilder(100);
         buff.append(Constants.URL_PREFIX).append(Constants.URL_TCP).append("//127.0.0.1:")
                 .append(Constants.DEFAULT_TCP_PORT).append('/').append(Constants.PROJECT_NAME);
         url = buff.toString();
-        println("[Enter]   " + url);
-        print("URL       ");
+        println("[Enter] " + url);
+        print("URL ");
         url = readLine(url).trim();
 
         user = "root";
-        println("[Enter]   " + user);
-        print("User      ");
+        println("[Enter] " + user);
+        print("User ");
         user = readLine(user);
 
-        println("[Enter]   Hide");
+        println("[Enter] Hide");
         password = readPassword();
     }
 
@@ -176,16 +205,22 @@ public class Shell {
     private void showWelcome() {
         println();
         println("Welcome to Lealone Shell " + Constants.getVersion());
-        println("Exit with Ctrl+C");
+        // println("Exit with Ctrl+C");
     }
 
     private void showUsage() {
         println("Options are case sensitive. Supported options are:");
-        println("[-help] or [-?]           Print the list of options");
-        println("[-url \"<url>\"]            The database URL (jdbc:lealone:...)");
-        println("[-user <user>]            The user name");
-        println("[-password <pwd>]         The password");
-        println("[-sql \"<statements>\"]     Execute the SQL statements and exit");
+        println("-------------------------------------------------");
+        println("[-help] or [-?]         Print the list of options");
+        showClientOrEmbeddedModeOptions();
+    }
+
+    void showClientOrEmbeddedModeOptions() {
+        println("[-url \"<url>\"]          The database URL (jdbc:lealone:...)");
+        println("[-user <user>]          The user name");
+        println("[-password <pwd>]       The password");
+        println("[-database <db>]        The database");
+        println("[-sql \"<statements>\"]   Execute the SQL statements and exit");
         println();
         println("If special characters don't work as expected, ");
         println("you may need to use -Dfile.encoding=UTF-8 (Mac OS X) or CP850 (Windows).");
