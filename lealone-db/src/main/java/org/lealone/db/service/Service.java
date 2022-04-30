@@ -18,6 +18,7 @@ import org.lealone.db.api.ErrorCode;
 import org.lealone.db.schema.Schema;
 import org.lealone.db.schema.SchemaObjectBase;
 import org.lealone.db.session.ServerSession;
+import org.lealone.db.util.SourceCompiler;
 import org.lealone.db.value.Value;
 
 public class Service extends SchemaObjectBase {
@@ -30,6 +31,7 @@ public class Service extends SchemaObjectBase {
     private final List<ServiceMethod> serviceMethods;
 
     private ServiceExecutor executor;
+    private StringBuilder executorCode;
 
     public Service(Schema schema, int id, String name, String sql, String serviceExecutorClassName,
             List<ServiceMethod> serviceMethods) {
@@ -77,6 +79,10 @@ public class Service extends SchemaObjectBase {
         return sql;
     }
 
+    public void setExecutorCode(StringBuilder executorCode) {
+        this.executorCode = executorCode;
+    }
+
     public void setExecutor(ServiceExecutor executor) {
         this.executor = executor;
     }
@@ -85,8 +91,15 @@ public class Service extends SchemaObjectBase {
     public ServiceExecutor getExecutor() {
         if (executor == null) {
             synchronized (this) {
-                if (executor == null)
-                    executor = Utils.newInstance(serviceExecutorClassName);
+                if (executor == null) {
+                    if (executorCode != null) {
+                        String code = executorCode.toString();
+                        executorCode = null;
+                        executor = SourceCompiler.compileAsInstance(serviceExecutorClassName, code);
+                    } else {
+                        executor = Utils.newInstance(serviceExecutorClassName);
+                    }
+                }
             }
         }
         return executor;
@@ -116,11 +129,13 @@ public class Service extends SchemaObjectBase {
 
     // 通过http调用
     public static String execute(String serviceName, String methodName, Map<String, Object> methodArgs) {
-        serviceName = serviceName.toUpperCase();
-        methodName = methodName.toUpperCase();
         String[] a = StringUtils.arraySplit(serviceName, '.');
         if (a.length == 3) {
             Database db = LealoneDatabase.getInstance().getDatabase(a[0]);
+            if (db.getSettings().databaseToUpper) {
+                serviceName = serviceName.toUpperCase();
+                methodName = methodName.toUpperCase();
+            }
             Service service = getService(null, db, a[1], a[2]);
             return service.getExecutor().executeService(methodName, methodArgs);
         } else {
@@ -130,12 +145,15 @@ public class Service extends SchemaObjectBase {
 
     // 通过sockjs调用
     public static String execute(String serviceName, String json) {
-        serviceName = serviceName.toUpperCase();
         String[] a = StringUtils.arraySplit(serviceName, '.');
         if (a.length == 4) {
             Database db = LealoneDatabase.getInstance().getDatabase(a[0]);
+            String methodName = a[3];
+            if (db.getSettings().databaseToUpper) {
+                methodName = methodName.toUpperCase();
+            }
             Service service = getService(null, db, a[1], a[2]);
-            return service.getExecutor().executeService(a[3], json);
+            return service.getExecutor().executeService(methodName, json);
         } else {
             throw new RuntimeException("service " + serviceName + " not found");
         }

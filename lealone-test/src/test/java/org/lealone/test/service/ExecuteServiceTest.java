@@ -5,10 +5,12 @@
  */
 package org.lealone.test.service;
 
+import java.sql.Array;
 import java.util.UUID;
 
 import org.junit.Test;
 import org.lealone.db.Constants;
+import org.lealone.test.orm.AllModelPropertyTest;
 import org.lealone.test.orm.SqlScript;
 import org.lealone.test.orm.generated.User;
 import org.lealone.test.service.generated.AllTypeService;
@@ -26,6 +28,7 @@ public class ExecuteServiceTest extends SqlTestBase {
 
         // 创建user表
         SqlScript.createUserTable(this);
+        SqlScript.createAllModelPropertyTable(this);
         createService(this);
         executeService(url);
     }
@@ -51,7 +54,13 @@ public class ExecuteServiceTest extends SqlTestBase {
         User user = new User().name.set("zhh").phone.set(123);
         userService.add(user);
 
+        user = new User().name.set("zhh2").phone.set(456);
+        userService.add(user);
+
         user = userService.find("zhh");
+
+        Array list = userService.getList();
+        System.out.println(list.toString());
 
         user.notes.set("call remote service");
         userService.update(user);
@@ -64,6 +73,6 @@ public class ExecuteServiceTest extends SqlTestBase {
         f1 = allTypeService.testUuid(f1);
         System.out.println(f1);
 
-        // AllModelPropertyTest.insertRemote(allTypeService);
+        AllModelPropertyTest.insertRemote(allTypeService);
     }
 }

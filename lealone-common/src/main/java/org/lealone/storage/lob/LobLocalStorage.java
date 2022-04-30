@@ -3,7 +3,7 @@
  * and the EPL 1.0 (http://h2database.com/html/license.html).
  * Initial Developer: H2 Group
  */
-package org.lealone.client.storage;
+package org.lealone.storage.lob;
 
 import java.io.BufferedInputStream;
 import java.io.IOException;
@@ -14,7 +14,6 @@ import org.lealone.common.exceptions.DbException;
 import org.lealone.db.DataHandler;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueLob;
-import org.lealone.storage.LobStorage;
 
 /**
  * This factory creates in-memory objects and temporary files.
@@ -23,12 +22,18 @@ import org.lealone.storage.LobStorage;
  * @author H2 Group
  * @author zhh
  */
-public class ClientLobStorage implements LobStorage {
+public class LobLocalStorage implements LobStorage {
 
     private final DataHandler handler;
+    private final LobReader lobReader;
 
-    public ClientLobStorage(DataHandler handler) {
+    public LobLocalStorage(DataHandler handler) {
+        this(handler, null);
+    }
+
+    public LobLocalStorage(DataHandler handler, LobReader lobReader) {
         this.handler = handler;
+        this.lobReader = lobReader;
     }
 
     @Override
@@ -49,13 +54,6 @@ public class ClientLobStorage implements LobStorage {
         return ValueLob.createTempBlob(in, maxLength, handler);
     }
 
-    /**
-     * Create a CLOB object.
-     *
-     * @param reader the reader
-     * @param maxLength the maximum length (-1 if not known)
-     * @return the LOB
-     */
     @Override
     public Value createClob(Reader reader, long maxLength) {
         // need to use a temp file, because the input stream could come from
@@ -69,20 +67,12 @@ public class ClientLobStorage implements LobStorage {
         throw new UnsupportedOperationException();
     }
 
-    /**
-    * Get the input stream for the given lob.
-    *
-    * @param lob the lob
-    * @param hmac the message authentication code (for remote input streams)
-    * @param byteCount the number of bytes to read, or -1 if not known
-    * @return the stream
-    */
     @Override
     public InputStream getInputStream(ValueLob lob, byte[] hmac, long byteCount) throws IOException {
         if (byteCount < 0) {
             byteCount = Long.MAX_VALUE;
         }
-        return new BufferedInputStream(new ClientLobStorageInputStream(handler, lob, hmac, byteCount));
+        return new BufferedInputStream(new LobInputStream(lobReader, lob, hmac, byteCount));
     }
 
     @Override
@@ -103,32 +93,19 @@ public class ClientLobStorage implements LobStorage {
     /**
      * An input stream that reads from a remote LOB.
      */
-    private static class ClientLobStorageInputStream extends InputStream {
+    private static class LobInputStream extends InputStream {
 
-        /**
-         * The data handler.
-         */
-        private final DataHandler handler;
-
-        /**
-         * The lob id.
-         */
+        private final LobReader lobReader;
         private final long lobId;
-
         private final byte[] hmac;
-
-        /**
-         * The position.
-         */
         private long pos;
-
         /**
          * The remaining bytes in the lob.
          */
         private long remainingBytes;
 
-        ClientLobStorageInputStream(DataHandler handler, ValueLob lob, byte[] hmac, long byteCount) {
-            this.handler = handler;
+        LobInputStream(LobReader lobReader, ValueLob lob, byte[] hmac, long byteCount) {
+            this.lobReader = lobReader;
             this.lobId = lob.getLobId();
             this.hmac = hmac;
             remainingBytes = byteCount;
@@ -156,7 +133,7 @@ public class ClientLobStorage implements LobStorage {
                 return -1;
             }
             try {
-                length = handler.readLob(lobId, hmac, pos, buff, off, length);
+                length = lobReader.readLob(lobId, hmac, pos, buff, off, length);
             } catch (DbException e) {
                 throw DbException.convertToIOException(e);
             }
@@ -174,5 +151,20 @@ public class ClientLobStorage implements LobStorage {
             pos += n;
             return n;
         }
+    }
+
+    public static interface LobReader {
+        /**
+        * Read from a lob.
+        *
+        * @param lobId the lob
+        * @param hmac the message authentication code
+        * @param offset the offset within the lob
+        * @param buff the target buffer
+        * @param off the offset within the target buffer
+        * @param length the number of bytes to read
+        * @return the number of bytes read
+        */
+        int readLob(long lobId, byte[] hmac, long offset, byte[] buff, int off, int length);
     }
 }

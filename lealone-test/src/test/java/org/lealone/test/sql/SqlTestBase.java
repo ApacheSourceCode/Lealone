@@ -27,6 +27,7 @@ public class SqlTestBase extends TestBase implements org.lealone.test.TestBase.S
     protected ResultSet rs;
     protected String sql;
     protected RunMode runMode;
+    protected boolean databaseToUpper = true;
 
     protected SqlTestBase() {
         // addConnectionParameter("TRACE_LEVEL_FILE", TraceSystem.ADAPTER + "");
@@ -104,6 +105,7 @@ public class SqlTestBase extends TestBase implements org.lealone.test.TestBase.S
         String sql = "CREATE DATABASE IF NOT EXISTS " + dbName;
         if (runMode != null)
             sql += " RUN MODE " + runMode;
+        sql += " PARAMETERS(database_to_upper=" + databaseToUpper + ")";
         final String createDatabase = sql;
         class CDB extends SqlTestBase {
             public CDB() {
@@ -264,7 +266,7 @@ public class SqlTestBase extends TestBase implements org.lealone.test.TestBase.S
             rs = stmt.executeQuery(sql);
             rs.next();
         } catch (SQLException e) {
-            e.printStackTrace();
+            throw DbException.convert(e);
         }
     }
 
@@ -285,7 +287,7 @@ public class SqlTestBase extends TestBase implements org.lealone.test.TestBase.S
             count = printResultSet(rs);
             rs = null;
         } catch (SQLException e) {
-            e.printStackTrace();
+            throw DbException.convert(e);
         }
         return count;
     }
@@ -295,7 +297,7 @@ public class SqlTestBase extends TestBase implements org.lealone.test.TestBase.S
         try {
             stmt.execute(sql);
         } catch (Exception e) {
-            System.out.println(e.getMessage());
+            throw DbException.convert(e);
         }
     }
 

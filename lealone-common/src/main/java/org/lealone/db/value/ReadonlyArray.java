@@ -8,6 +8,7 @@ package org.lealone.db.value;
 import java.util.List;
 
 import org.lealone.common.trace.Trace;
+import org.lealone.common.util.StatementBuilder;
 
 /**
  * Represents a readonly ARRAY value.
@@ -25,29 +26,45 @@ public class ReadonlyArray extends ArrayBase {
         setValue(value);
     }
 
-    @SuppressWarnings("unchecked")
     public ReadonlyArray(Object value) {
         if (value instanceof List) {
-            setValue((List<String>) value);
+            setValue((List<?>) value);
         } else {
             setValue(value.toString());
         }
+    }
+
+    public ReadonlyArray(Object... values) {
+        setValue(values);
     }
 
     public ReadonlyArray(List<String> list) {
         setValue(list);
     }
 
+    private void setValue(List<?> list) {
+        setValue(list.toArray());
+    }
+
+    private void setValue(Object... values) {
+        value = DataType.convertToValue(values, Value.ARRAY);
+    }
+
     private void setValue(String value) {
         this.value = ValueString.get(value);
     }
 
-    private void setValue(List<String> list) {
-        int size = list.size();
-        Value[] values = new Value[size];
-        for (int i = 0; i < size; i++) {
-            values[i] = ValueString.get(list.get(i));
+    @Override
+    public String toString() {
+        if (value instanceof ValueArray) {
+            ValueArray va = (ValueArray) value;
+            StatementBuilder buff = new StatementBuilder("[");
+            for (Value v : va.getList()) {
+                buff.appendExceptFirst(", ");
+                buff.append(v.getTraceSQL());
+            }
+            return buff.append(']').toString();
         }
-        this.value = ValueArray.get(values);
+        return value.toString();
     }
 }

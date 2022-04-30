@@ -24,7 +24,6 @@ import org.lealone.db.SysProperties;
 import org.lealone.net.NetNode;
 import org.lealone.p2p.config.Config;
 import org.lealone.p2p.config.Config.PluggableEngineDef;
-import org.lealone.p2p.config.ConfigDescriptor;
 import org.lealone.p2p.config.ConfigLoader;
 import org.lealone.p2p.config.YamlConfigLoader;
 import org.lealone.p2p.server.ClusterMetaData;
@@ -62,7 +61,7 @@ public class Lealone {
     private String p2pPort;
     private String seeds;
 
-    private void start(String[] args) {
+    public void start(String[] args) {
         for (int i = 0; args != null && i < args.length; i++) {
             String arg = args[i].trim();
             if (arg.isEmpty())
@@ -136,7 +135,9 @@ public class Lealone {
             long t1 = (System.currentTimeMillis() - t);
             t = System.currentTimeMillis();
 
+            beforeInit();
             init();
+            afterInit(config);
 
             long t2 = (System.currentTimeMillis() - t);
             t = System.currentTimeMillis();
@@ -166,6 +167,12 @@ public class Lealone {
         }
     }
 
+    protected void beforeInit() {
+    }
+
+    protected void afterInit(Config config) {
+    }
+
     private void loadConfig() {
         ConfigLoader loader;
         String loaderClass = Config.getProperty("config.loader");
@@ -174,7 +181,7 @@ public class Lealone {
         } else {
             loader = new YamlConfigLoader();
         }
-        Config config = loader.loadConfig(true);
+        Config config = loader.loadConfig();
         config = Config.mergeDefaultConfig(config);
         if (host != null || port != null) {
             if (host != null)
@@ -208,7 +215,7 @@ public class Lealone {
         if (seeds != null) {
             config.cluster_config.seed_provider.parameters.put("seeds", seeds);
         }
-        ConfigDescriptor.applyConfig(config);
+        loader.applyConfig(config);
         this.config = config;
     }
 

@@ -21,13 +21,7 @@ public class SqlScript implements MainTest {
     private static class SqlScriptTest extends OrmTestBase {
         @Override
         public void test() {
-            createCustomerTable(this);
-            createCustomerAddressTable(this);
-            createUserTable(this);
-            createProductTable(this);
-            createOrderTable(this);
-            createOrderItemTable(this);
-            createAllModelPropertyTable(this);
+            createTables(this);
             createUserService(this);
             createHelloWorldService(this);
             createAllTypeService(this);
@@ -43,9 +37,9 @@ public class SqlScript implements MainTest {
     }
 
     public static void createTables(SqlExecutor executor) {
+        createUserTable(executor);
         createCustomerTable(executor);
         createCustomerAddressTable(executor);
-        createUserTable(executor);
         createProductTable(executor);
         createOrderTable(executor);
         createOrderItemTable(executor);
@@ -199,6 +193,7 @@ public class SqlScript implements MainTest {
                 + " add(user user) long," // 第一个user是参数名，第二个user是参数类型
                 + " find(name varchar) user," //
                 + " update(user user) int," //
+                + " get_list() array," //
                 + " delete(name varchar) int)" //
                 + " package '" + SERVICE_PACKAGE_NAME + "'" //
                 // 如果是内部类，不能用getClassName()，会包含$字符

@@ -5,6 +5,8 @@
  */
 package org.lealone.test.service.impl;
 
+import java.sql.Array;
+
 import org.lealone.test.orm.generated.User;
 import org.lealone.test.service.generated.UserService;
 
@@ -30,4 +32,8 @@ public class UserServiceImpl implements UserService {
         return User.dao.where().name.eq(name).delete();
     }
 
+    @Override
+    public Array getList() {
+        return User.dao.findArray();
+    }
 }

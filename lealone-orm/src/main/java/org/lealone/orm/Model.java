@@ -5,27 +5,38 @@
  */
 package org.lealone.orm;
 
+import java.sql.Array;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Set;
 import java.util.concurrent.ConcurrentSkipListMap;
 
+import org.lealone.common.exceptions.DbException;
 import org.lealone.common.logging.Logger;
 import org.lealone.common.logging.LoggerFactory;
+import org.lealone.common.util.CaseInsensitiveMap;
+import org.lealone.db.constraint.ConstraintReferential;
 import org.lealone.db.index.Index;
+import org.lealone.db.index.IndexColumn;
 import org.lealone.db.result.Result;
 import org.lealone.db.session.ServerSession;
 import org.lealone.db.table.Column;
 import org.lealone.db.table.Table;
+import org.lealone.db.value.DataType;
+import org.lealone.db.value.ReadonlyArray;
 import org.lealone.db.value.Value;
 import org.lealone.db.value.ValueInt;
 import org.lealone.db.value.ValueLong;
 import org.lealone.db.value.ValueNull;
 import org.lealone.orm.json.JsonObject;
+import org.lealone.orm.property.PBase;
 import org.lealone.orm.property.PLong;
 import org.lealone.sql.dml.Delete;
 import org.lealone.sql.dml.Insert;
@@ -283,6 +294,7 @@ public abstract class Model<T extends Model<T>> {
         if (m != this) {
             return m.orderBy();
         }
+        joinTableFilter();
         getStack().pop();
         pushExprBuilder(getWhereExpressionBuilder());
         return root;
@@ -299,6 +311,10 @@ public abstract class Model<T extends Model<T>> {
             groupExpressions.add(c);
         }
         return root;
+    }
+
+    private static ExpressionColumn getExpressionColumn(Table table, String cName) {
+        return new ExpressionColumn(table.getDatabase(), table.getSchema().getName(), table.getName(), cName);
     }
 
     static ExpressionColumn getExpressionColumn(ModelProperty<?> p) {
@@ -392,10 +408,10 @@ public abstract class Model<T extends Model<T>> {
         // 进行关联查询时，主表取一条记录，但引用表要取多条
         if (tableFilterStack != null && !tableFilterStack.isEmpty()) {
             List<T> list = findList();
-            if (!list.isEmpty()) {
-                return list.get(0);
-            } else {
+            if (list.isEmpty()) {
                 return null;
+            } else {
+                return list.get(0);
             }
         }
         Select select = createSelect(tid);
@@ -406,7 +422,55 @@ public abstract class Model<T extends Model<T>> {
         Result result = select.executeQuery(1).get();
         result.next();
         reset();
-        return deserialize(result, new HashMap<>(1), new ArrayList<>(1));
+
+        Map<Class<?>, Map<Long, Model<?>>> map = new LinkedHashMap<>();
+        String[] fieldNames = getFieldNames(result);
+        Set<Model<?>> set = getAllAssociateInstances(fieldNames);
+        deserialize(result, fieldNames, set, map);
+        Map<Long, Model<?>> models = map.get(this.getClass());
+        if (models != null) {
+            for (Model<?> m : models.values()) {
+                m.bindAssociateInstances(map);
+                return ((T) m);
+            }
+        }
+        return null;
+    }
+
+    // 如果select字段列表中没有加上引用约束的字段，那么自动加上
+    private HashMap<String, ExpressionColumn> getRefConstraintColumns(HashSet<Table> tables) {
+        CaseInsensitiveMap<ExpressionColumn> columnMap = new CaseInsensitiveMap<>();
+        CaseInsensitiveMap<ExpressionColumn> selectMap = new CaseInsensitiveMap<>(selectExpressions.size());
+        for (Expression e : selectExpressions) {
+            if (e instanceof ExpressionColumn) {
+                ExpressionColumn c = (ExpressionColumn) e;
+                selectMap.put(c.getAlias(), c);
+            }
+        }
+
+        for (Table table : tables) {
+            for (ConstraintReferential ref : table.getReferentialConstraints()) {
+                Table refTable = ref.getRefTable();
+                Table owner = ref.getTable();
+                if (tables.contains(refTable) && tables.contains(owner)) {
+                    IndexColumn[] refColumns = ref.getRefColumns();
+                    IndexColumn[] columns = ref.getColumns();
+                    for (int i = 0; i < columns.length; i++) {
+                        String name = columns[i].column.getName();
+                        String refName = refColumns[i].column.getName();
+                        String key = owner.getName() + "." + name;
+                        String refKey = refTable.getName() + "." + refName;
+                        if (!columnMap.containsKey(key) && !selectMap.containsKey(key)) {
+                            columnMap.put(key, getExpressionColumn(owner, name));
+                        }
+                        if (!columnMap.containsKey(refKey) && !selectMap.containsKey(refKey)) {
+                            columnMap.put(refKey, getExpressionColumn(refTable, refName));
+                        }
+                    }
+                }
+            }
+        }
+        return columnMap;
     }
 
     private Select createSelect(Long tid) {
@@ -418,12 +482,17 @@ public abstract class Model<T extends Model<T>> {
                 // 表join时，如果没加where条件，在这里把TableFilter连在一起
                 joinTableFilter();
             }
+            HashSet<Table> tables;
             tableFilter = tableFilterStack.peek();
             select.addTableFilter(tableFilter, true);
             boolean selectExpressionsIsNull = false;
             if (selectExpressions == null) {
+                tables = null;
                 selectExpressionsIsNull = true;
                 getSelectExpressions().add(new Wildcard(tableFilter.getSchemaName(), tableFilter.getTableAlias()));
+            } else {
+                tables = new HashSet<>();
+                tables.add(tableFilter.getTable());
             }
             selectExpressions.add(getExpressionColumn(tableFilter, Column.ROWID)); // 总是获取rowid
             while (tableFilter.getJoin() != null) {
@@ -431,8 +500,12 @@ public abstract class Model<T extends Model<T>> {
                 tableFilter = tableFilter.getJoin();
                 if (selectExpressionsIsNull)
                     selectExpressions.add(new Wildcard(tableFilter.getSchemaName(), tableFilter.getTableAlias()));
+                else
+                    tables.add(tableFilter.getTable());
                 selectExpressions.add(getExpressionColumn(tableFilter, Column.ROWID)); // 总是获取rowid
             }
+            if (!selectExpressionsIsNull)
+                selectExpressions.addAll(getRefConstraintColumns(tables).values());
         } else {
             tableFilter = new TableFilter(session, modelTable.getTable(), null, true, null);
             select.addTableFilter(tableFilter, true);
@@ -460,58 +533,56 @@ public abstract class Model<T extends Model<T>> {
         return select;
     }
 
-    private T deserialize(Result result, HashMap<Long, Model> models, ArrayList<T> list) {
+    private void deserialize(Result result, String[] fieldNames, Set<Model<?>> set,
+            Map<Class<?>, Map<Long, Model<?>>> topMap) {
         Value[] row = result.currentRow();
         if (row == null)
-            return null;
+            return;
 
         int len = row.length;
         HashMap<String, Value> map = new HashMap<>(len);
         for (int i = 0; i < len; i++) {
             // 只反序列化非null字段
             if (row[i] != null && row[i] != ValueNull.INSTANCE) {
-                String key = result.getSchemaName(i) + "." + result.getTableName(i) + "." + result.getColumnName(i);
-                map.put(key, row[i]);
+                map.put(fieldNames[i], row[i]);
             }
         }
-
-        Model m = newInstance(modelTable, REGULAR_MODEL);
-
-        if (m != null) {
+        for (Model<?> m : set) {
+            m = m.newInstance(m.modelTable, REGULAR_MODEL);
             m._rowid_.deserialize(map);
-            Model old = models.get(m._rowid_.get());
+            if (m._rowid_.get() == 0) {
+                DbException.throwInternalError();
+            }
+            Model<?> old = putIfAbsent(topMap, m);
             if (old == null) {
-                models.put(m._rowid_.get(), m);
                 for (ModelProperty p : m.modelProperties) {
                     p.deserialize(map);
                 }
-                list.add((T) m);
-            } else {
-                m = old;
             }
         }
-        deserializeAssociateInstances(map, m.newAssociateInstances());
-        return (T) m;
     }
 
-    private void deserializeAssociateInstances(HashMap<String, Value> map, List<Model<?>> associateModels) {
-        if (associateModels != null) {
-            for (Model associateModel : associateModels) {
-                for (ModelProperty p : associateModel.modelProperties) {
-                    p.deserialize(map);
-                }
-                associateModel._rowid_.deserialize(map);
-                deserializeAssociateInstances(map, associateModel.newAssociateInstances());
-            }
+    private Model putIfAbsent(Map<Class<?>, Map<Long, Model<?>>> topMap, Model m) {
+        Map<Long, Model<?>> models = topMap.get(m.getClass());
+        Model old = null;
+        if (models == null) {
+            models = new LinkedHashMap<>();
+            topMap.put(m.getClass(), models);
+        } else {
+            old = models.get(m._rowid_.get());
         }
+        if (old == null) {
+            models.put(m._rowid_.get(), m);
+        }
+        return old;
     }
 
     protected Model newInstance(ModelTable t, short modelType) {
         return null;
     }
 
-    protected List<Model<?>> newAssociateInstances() {
-        return null;
+    protected static boolean areEqual(PBase<?, ?> p1, PBase<?, ?> p2) {
+        return ModelProperty.areEqual(p1.get(), p2.get());
     }
 
     public Map<String, Object> toMap() {
@@ -565,12 +636,45 @@ public abstract class Model<T extends Model<T>> {
         logger.info("execute sql: " + select.getPlanSQL());
         Result result = select.executeQuery(-1).get();
         reset();
-        ArrayList<T> list = new ArrayList<>(result.getRowCount());
-        HashMap<Long, Model> models = new HashMap<>(result.getRowCount());
+
+        Map<Class<?>, Map<Long, Model<?>>> map = new HashMap<>();
+        String[] fieldNames = getFieldNames(result);
+        Set<Model<?>> set = getAllAssociateInstances(fieldNames);
         while (result.next()) {
-            deserialize(result, models, list);
+            deserialize(result, fieldNames, set, map);
+        }
+        ArrayList<T> list = new ArrayList<>(result.getRowCount());
+        Map<Long, Model<?>> models = map.get(this.getClass());
+        if (models != null) {
+            for (Model<?> m : models.values()) {
+                m.bindAssociateInstances(map);
+                list.add((T) m);
+            }
         }
         return list;
+    }
+
+    private String[] getFieldNames(Result result) {
+        int len = result.getVisibleColumnCount();
+        String[] fieldNames = new String[len];
+        for (int i = 0; i < len; i++) {
+            fieldNames[i] = result.getSchemaName(i) + "." + result.getTableName(i) + "." + result.getColumnName(i);
+        }
+        return fieldNames;
+    }
+
+    public Array findArray() {
+        return findArray(null);
+    }
+
+    public Array findArray(Long tid) {
+        List<T> list = findList(tid);
+        int size = list.size();
+        Object[] values = new Object[size];
+        for (int i = 0; i < size; i++) {
+            values[i] = list.get(i).encode();
+        }
+        return new ReadonlyArray(DataType.convertToValue(values, Value.ARRAY));
     }
 
     public <M extends Model<M>> M m(Model<M> m) {
@@ -587,6 +691,8 @@ public abstract class Model<T extends Model<T>> {
                 m = m3;
             }
         }
+        m.tableFilterStack = this.tableFilterStack;
+        m.whereExpressionBuilder = (ExpressionBuilder<M>) this.whereExpressionBuilder;
         peekExprBuilder().setModel((T) m);
         m.pushExprBuilder((ExpressionBuilder<M>) peekExprBuilder());
         return m.root;
@@ -650,6 +756,10 @@ public abstract class Model<T extends Model<T>> {
             throw new UnsupportedOperationException("The insert operation is not allowed for " + name
                     + ".dao,  please use new " + name + "().insert() instead.");
         }
+        // 批量提交子model需要在一个事务中执行
+        if (modelList != null) {
+            tid = beginTransaction();
+        }
         ServerSession session = getSession(tid);
         Table dbTable = modelTable.getTable();
         Insert insert = new Insert(session);
@@ -671,13 +781,19 @@ public abstract class Model<T extends Model<T>> {
         long rowId = session.getLastIdentity().getLong(); // session.getLastRowKey()在事务提交时被设为null了
         _rowid_.set(rowId);
 
+        if (modelList != null) {
+            try {
+                for (Model<?> m : modelList) {
+                    m.insert(tid);
+                }
+                commitTransaction(tid);
+            } catch (Exception e) {
+                rollbackTransaction(tid);
+                throw DbException.convert(e);
+            }
+        }
         if (session.isAutoCommit()) {
             session.commit();
-        }
-        if (modelList != null) {
-            for (Model<?> m : modelList) {
-                m.insert(tid);
-            }
         }
         reset();
         return rowId;
@@ -883,7 +999,7 @@ public abstract class Model<T extends Model<T>> {
     }
 
     public long beginTransaction() {
-        checkDao("beginTransaction");
+        // checkDao("beginTransaction");
         Table dbTable = modelTable.getTable();
         ServerSession session = dbTable.getDatabase().createSession(modelTable.getSession().getUser());
         Transaction t = session.getTransaction();
@@ -901,7 +1017,7 @@ public abstract class Model<T extends Model<T>> {
     }
 
     public void commitTransaction() {
-        checkDao("commitTransaction");
+        // checkDao("commitTransaction");
         Long tid = getAndRemoveLastTransaction();
         if (tid != null) {
             commitTransaction(tid.longValue());
@@ -909,7 +1025,7 @@ public abstract class Model<T extends Model<T>> {
     }
 
     public void commitTransaction(long tid) {
-        checkDao("commitTransaction");
+        // checkDao("commitTransaction");
         ServerSession s = currentSessions.remove(tid);
         if (s != null) {
             removeSession(tid);
@@ -918,7 +1034,7 @@ public abstract class Model<T extends Model<T>> {
     }
 
     public void rollbackTransaction() {
-        checkDao("rollbackTransaction");
+        // checkDao("rollbackTransaction");
         Long tid = getAndRemoveLastTransaction();
         if (tid != null) {
             rollbackTransaction(tid.longValue());
@@ -926,7 +1042,7 @@ public abstract class Model<T extends Model<T>> {
     }
 
     public void rollbackTransaction(long tid) {
-        checkDao("rollbackTransaction");
+        // checkDao("rollbackTransaction");
         ServerSession s = currentSessions.remove(tid);
         if (s != null) {
             removeSession(tid);
@@ -1017,5 +1133,95 @@ public abstract class Model<T extends Model<T>> {
             }
         }
         System.out.println(sql);
+    }
+
+    ////////////////////// 以下代码从结果集构建出模型实例后，再把模型实例彼此的关联关系绑定 /////////////////////
+
+    private Set<Model<?>> getAllAssociateInstances(String[] fieldNames) {
+        HashMap<Class<?>, Model<?>> map = new HashMap();
+        getAllAssociateInstances(map);
+        HashSet<Model<?>> set = new HashSet<>();
+        HashSet<String> names = new HashSet<>(Arrays.asList(fieldNames));
+        for (Model<?> m : map.values()) {
+            // 结果集中没有model对应的表的记录，不用处理
+            if (names.contains(m._rowid_.getFullName())) {
+                set.add(m);
+            }
+        }
+        return set;
+    }
+
+    private void getAllAssociateInstances(HashMap<Class<?>, Model<?>> map) {
+        if (map.containsKey(getClass()))
+            return;
+        map.put(getClass(), this);
+
+        if (setters != null) {
+            getAllAssociateInstances(map, setters);
+        }
+        if (adders != null) {
+            getAllAssociateInstances(map, adders);
+        }
+    }
+
+    private void getAllAssociateInstances(HashMap<Class<?>, Model<?>> map, AssociateOperation... aos) {
+        for (AssociateOperation ao : aos) {
+            ao.getDao().getAllAssociateInstances(map);
+        }
+    }
+
+    private AssociateSetter[] setters;
+    private AssociateAdder[] adders;
+
+    protected void initSetters(AssociateSetter... setters) {
+        this.setters = setters;
+    }
+
+    protected void initAdders(AssociateAdder... adders) {
+        this.adders = adders;
+    }
+
+    protected static interface AssociateOperation<T extends Model> {
+        public T getDao();
+    }
+
+    protected static interface AssociateSetter<T extends Model> extends AssociateOperation<T> {
+        public boolean set(T m);
+    }
+
+    protected static interface AssociateAdder<T extends Model> extends AssociateOperation<T> {
+        public void add(T m);
+    }
+
+    private boolean bound;
+
+    private void bindAssociateInstances(Map<Class<?>, Map<Long, Model<?>>> map) {
+        if (bound)
+            return;
+        bound = true;
+        if (setters != null) {
+            for (AssociateSetter setter : setters) {
+                Map<Long, Model<?>> models = map.get(setter.getDao().getClass());
+                if (models != null) {
+                    for (Model<?> m : models.values()) {
+                        m.bindAssociateInstances(map);
+                        if (setter.set(m)) {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if (adders != null) {
+            for (AssociateAdder adder : adders) {
+                Map<Long, Model<?>> models = map.get(adder.getDao().getClass());
+                if (models != null) {
+                    for (Model<?> m : models.values()) {
+                        m.bindAssociateInstances(map);
+                        adder.add(m);
+                    }
+                }
+            }
+        }
     }
 }
