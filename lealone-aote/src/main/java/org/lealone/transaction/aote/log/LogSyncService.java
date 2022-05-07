@@ -5,13 +5,16 @@
  */
 package org.lealone.transaction.aote.log;
 
-import java.util.ArrayList;
 import java.util.Map;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 
-import org.lealone.common.concurrent.WaitQueue;
+import org.lealone.common.exceptions.DbException;
+import org.lealone.common.util.MapUtils;
+import org.lealone.transaction.RedoLogSyncListener;
 import org.lealone.transaction.aote.AMTransaction;
 
 public abstract class LogSyncService extends Thread {
@@ -20,43 +23,33 @@ public abstract class LogSyncService extends Thread {
     public static final String LOG_SYNC_TYPE_INSTANT = "instant";
     public static final String LOG_SYNC_TYPE_NO_SYNC = "no_sync";
 
-    protected final Semaphore haveWork = new Semaphore(1);
-    protected final WaitQueue syncComplete = new WaitQueue();
+    private final int waitingQueueSize;
+    private final AtomicReferenceArray<RedoLogSyncListener> waitingListeners;
+    private final AtomicBoolean hasWaitingListeners = new AtomicBoolean(false);
+    private final Semaphore haveWork = new Semaphore(1);
 
     // 只要达到一定的阈值就可以立即同步了
-    protected final int redoLogRecordSyncThreshold;
-    protected final LinkedBlockingQueue<AMTransaction> transactions = new LinkedBlockingQueue<>();
+    private final int redoLogRecordSyncThreshold;
+    private final RedoLog redoLog;
 
-    protected long syncIntervalMillis;
-    protected volatile long lastSyncedAt = System.currentTimeMillis();
-    protected boolean running = true;
-    protected RedoLog redoLog;
-
+    private volatile boolean running = true;
     private volatile boolean waiting;
+
+    protected volatile long lastSyncedAt = System.currentTimeMillis();
+    protected long syncIntervalMillis;
 
     public LogSyncService(Map<String, String> config) {
         setName(getClass().getSimpleName());
-        setDaemon(true);
-        if (config.containsKey("redo_log_record_sync_threshold"))
-            redoLogRecordSyncThreshold = Integer.parseInt(config.get("redo_log_record_sync_threshold"));
-        else
-            redoLogRecordSyncThreshold = 100;
+        // setDaemon(true);
+        redoLogRecordSyncThreshold = MapUtils.getInt(config, "redo_log_record_sync_threshold", 100);
+        redoLog = new RedoLog(config);
+
+        waitingQueueSize = MapUtils.getInt(config, "redo_log_sync_Listener_size", 100);
+        waitingListeners = new AtomicReferenceArray<>(waitingQueueSize);
     }
 
     public RedoLog getRedoLog() {
         return redoLog;
-    }
-
-    public abstract void maybeWaitForSync(RedoLogRecord r);
-
-    public void asyncCommit(AMTransaction t) {
-        transactions.add(t);
-        haveWork.release();
-    }
-
-    public void close() {
-        running = false;
-        haveWork.release(1);
     }
 
     @Override
@@ -65,7 +58,6 @@ public abstract class LogSyncService extends Thread {
             long syncStarted = System.currentTimeMillis();
             sync();
             lastSyncedAt = syncStarted;
-            syncComplete.signalAll();
             if (redoLog.size() > redoLogRecordSyncThreshold)
                 continue;
             long now = System.currentTimeMillis();
@@ -89,37 +81,25 @@ public abstract class LogSyncService extends Thread {
     }
 
     private void sync() {
-        if (redoLog != null)
-            redoLog.save();
+        redoLog.save();
         notifyComplete();
     }
 
     private void notifyComplete() {
-        if (transactions.isEmpty())
-            return;
-        ArrayList<AMTransaction> oldTransactions = new ArrayList<>(transactions.size());
-        transactions.drainTo(oldTransactions);
-        for (AMTransaction t : oldTransactions) {
-            t.asyncCommitComplete();
+        if (hasWaitingListeners.compareAndSet(true, false)) {
+            for (int i = 0; i < waitingQueueSize; i++) {
+                RedoLogSyncListener listener = waitingListeners.get(i);
+                if (listener != null) {
+                    listener.wakeUpListener();
+                    waitingListeners.compareAndSet(i, listener, null);
+                }
+            }
         }
     }
 
-    public void addRedoLogRecord(RedoLogRecord r) {
-        redoLog.addRedoLogRecord(r);
-        // 对于需要立即做同步的场景，及时唤醒日志同步线程
-        if (isInstantSync() || waiting)
+    private void wakeUp() {
+        if (waiting)
             haveWork.release();
-    }
-
-    public void addAndMaybeWaitForSync(RedoLogRecord r) {
-        redoLog.addRedoLogRecord(r);
-        maybeWaitForSync(r);
-    }
-
-    public void checkpoint(long checkpointId) {
-        RedoLogRecord r = RedoLogRecord.createCheckpoint(checkpointId);
-        addRedoLogRecord(r);
-        maybeWaitForSync(r);
     }
 
     public boolean isInstantSync() {
@@ -128,6 +108,63 @@ public abstract class LogSyncService extends Thread {
 
     public boolean needSync() {
         return true;
+    }
+
+    public void asyncCommit(RedoLogRecord r, AMTransaction t, RedoLogSyncListener listener) {
+        // 可能为null
+        if (r == null)
+            return;
+        if (listener == null) {
+            Object obj = Thread.currentThread();
+            if (obj instanceof RedoLogSyncListener) {
+                listener = (RedoLogSyncListener) obj;
+            }
+        }
+        if (listener != null) {
+            int id = listener.getListenerId();
+            if (id >= 0) {
+                waitingListeners.set(id, listener);
+                hasWaitingListeners.set(true);
+                listener.addWaitingTransaction(t);
+            }
+        }
+        redoLog.addRedoLogRecord(r);
+        wakeUp();
+    }
+
+    public void close() {
+        running = false;
+        wakeUp();
+    }
+
+    public void addRedoLogRecord(RedoLogRecord r) {
+        // 可能为null
+        if (r == null)
+            return;
+        redoLog.addRedoLogRecord(r);
+        wakeUp();
+    }
+
+    public abstract void addAndMaybeWaitForSync(RedoLogRecord r);
+
+    protected void addAndWaitForSync(RedoLogRecord r) {
+        // 可能为null
+        if (r == null)
+            return;
+        CountDownLatch latch = new CountDownLatch(1);
+        r.setLatch(latch);
+        redoLog.addRedoLogRecord(r);
+        wakeUp();
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            throw DbException.convert(e);
+        }
+    }
+
+    public void checkpoint(long checkpointId) {
+        RedoLogRecord r = RedoLogRecord.createCheckpoint(checkpointId);
+        addAndMaybeWaitForSync(r);
     }
 
     public static LogSyncService create(Map<String, String> config) {
@@ -141,7 +178,6 @@ public abstract class LogSyncService extends Thread {
             logSyncService = new NoLogSyncService(config);
         else
             throw new IllegalArgumentException("Unknow log_sync_type: " + logSyncType);
-        logSyncService.redoLog = new RedoLog(config);
         return logSyncService;
     }
 }

@@ -7,17 +7,13 @@ package org.lealone.transaction.aote.log;
 
 import java.util.Map;
 
-import org.lealone.common.concurrent.WaitQueue;
-import org.lealone.common.util.DateTimeUtils;
+import org.lealone.common.util.MapUtils;
 
 class InstantLogSyncService extends LogSyncService {
 
-    private static final long DEFAULT_LOG_SYNC_INTERVAL = 5;
-
     InstantLogSyncService(Map<String, String> config) {
         super(config);
-        syncIntervalMillis = DateTimeUtils.getLoopInterval(config, "log_sync_service_loop_interval",
-                DEFAULT_LOG_SYNC_INTERVAL);
+        syncIntervalMillis = MapUtils.getLong(config, "log_sync_service_loop_interval", 5);
     }
 
     @Override
@@ -26,17 +22,8 @@ class InstantLogSyncService extends LogSyncService {
     }
 
     @Override
-    public void maybeWaitForSync(RedoLogRecord r) {
-        haveWork.release();
-        if (!r.isSynced() && running) {
-            while (true) {
-                WaitQueue.Signal signal = syncComplete.register();
-                if (r.isSynced() || !running) {
-                    signal.cancel();
-                    return;
-                } else
-                    signal.awaitUninterruptibly();
-            }
-        }
+    public void addAndMaybeWaitForSync(RedoLogRecord r) {
+        // 总是等待
+        addAndWaitForSync(r);
     }
 }

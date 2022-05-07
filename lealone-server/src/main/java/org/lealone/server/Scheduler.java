@@ -6,7 +6,10 @@
 package org.lealone.server;
 
 import java.io.IOException;
+import java.nio.channels.ClosedChannelException;
 import java.nio.channels.SelectionKey;
+import java.nio.channels.ServerSocketChannel;
+import java.util.LinkedList;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -19,7 +22,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.lealone.common.concurrent.ScheduledExecutors;
 import org.lealone.common.logging.Logger;
 import org.lealone.common.logging.LoggerFactory;
-import org.lealone.common.util.DateTimeUtils;
+import org.lealone.common.util.MapUtils;
 import org.lealone.db.async.AsyncPeriodicTask;
 import org.lealone.db.async.AsyncResult;
 import org.lealone.db.async.AsyncTask;
@@ -34,10 +37,11 @@ import org.lealone.sql.PreparedSQLStatement;
 import org.lealone.sql.SQLStatementExecutor;
 import org.lealone.storage.page.PageOperation;
 import org.lealone.storage.page.PageOperationHandlerBase;
+import org.lealone.transaction.RedoLogSyncListener;
 import org.lealone.transaction.Transaction;
 
 public class Scheduler extends PageOperationHandlerBase implements Runnable, SQLStatementExecutor, AsyncTaskHandler,
-        Transaction.Listener, PageOperation.ListenerFactory<Object> {
+        Transaction.Listener, PageOperation.ListenerFactory<Object>, RedoLogSyncListener {
 
     private static final Logger logger = LoggerFactory.getLogger(Scheduler.class);
 
@@ -70,7 +74,7 @@ public class Scheduler extends PageOperationHandlerBase implements Runnable, SQL
         }
         if (netEventLoop == null) {
             // 默认100毫秒
-            loopInterval = DateTimeUtils.getLoopInterval(config, key, 100);
+            loopInterval = MapUtils.getLong(config, key, 100);
         } else {
             loopInterval = 0;
             netEventLoop.setOwner(this);
@@ -411,6 +415,8 @@ public class Scheduler extends PageOperationHandlerBase implements Runnable, SQL
                             netEventLoop.read(key);
                         } else if ((readyOps & SelectionKey.OP_WRITE) != 0) {
                             netEventLoop.write(key);
+                        } else if ((readyOps & SelectionKey.OP_ACCEPT) != 0) {
+                            accept(key);
                         } else {
                             key.cancel();
                         }
@@ -438,11 +444,41 @@ public class Scheduler extends PageOperationHandlerBase implements Runnable, SQL
         // 在jdk1.8中不能直接在另一个线程中注册读写操作，否则会阻塞这个线程
         // jdk16不存在这个问题
         if (netEventLoop != null) {
-            handle(() -> {
+            if (asyncServer != null) {
                 conn.getWritableChannel().setEventLoop(netEventLoop); // 替换掉原来的
                 netEventLoop.register(conn);
+            } else {
+                handle(() -> {
+                    conn.getWritableChannel().setEventLoop(netEventLoop); // 替换掉原来的
+                    netEventLoop.register(conn);
+                });
+            }
+        }
+    }
+
+    private AsyncServer<?> asyncServer;
+    private ServerSocketChannel serverChannel;
+
+    public void registerAccepter(AsyncServer<?> asyncServer, ServerSocketChannel serverChannel) {
+        if (netEventLoop != null) {
+            this.asyncServer = asyncServer;
+            this.serverChannel = serverChannel;
+            handle(() -> {
+                try {
+                    serverChannel.register(netEventLoop.getSelector(), SelectionKey.OP_ACCEPT);
+                } catch (ClosedChannelException e) {
+                    logger.warn("Failed to register server channel: " + serverChannel);
+                }
             });
         }
+    }
+
+    private void accept(SelectionKey key) {
+        key.interestOps(key.interestOps() & ~SelectionKey.OP_ACCEPT);
+        asyncServer.getProtocolServer().accept(this);
+        asyncServer.registerAccepter(serverChannel);
+        asyncServer = null;
+        serverChannel = null;
     }
 
     @Override
@@ -473,5 +509,29 @@ public class Scheduler extends PageOperationHandlerBase implements Runnable, SQL
                 return result;
             }
         };
+    }
+
+    private LinkedList<Transaction> waitingTransactions;
+
+    @Override
+    public int getListenerId() {
+        return getHandlerId();
+    }
+
+    @Override
+    public void addWaitingTransaction(Transaction transaction) {
+        if (waitingTransactions == null)
+            waitingTransactions = new LinkedList<>();
+        waitingTransactions.add(transaction);
+    }
+
+    @Override
+    public void wakeUpListener() {
+        if (waitingTransactions != null) {
+            for (Transaction t : waitingTransactions) {
+                t.asyncCommitComplete();
+            }
+        }
+        wakeUp();
     }
 }
