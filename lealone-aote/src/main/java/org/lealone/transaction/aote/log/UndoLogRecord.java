@@ -102,28 +102,23 @@ public class UndoLogRecord {
 
     // 当前事务开始rollback了，调用这个方法在内存中撤销之前的更新
     public void rollback(AMTransactionEngine transactionEngine) {
-        if (undone)
+        if (undone || isForUpdate)
             return;
-        if (isForUpdate) {
-            newTV.rollback();
-            return;
-        }
         StorageMap<Object, TransactionalValue> map = transactionEngine.getStorageMap(mapName);
         // 有可能在执行DROP DATABASE时删除了
         if (map != null) {
             if (oldValue == null) {
                 map.remove(key);
             } else {
-                newTV.rollback();
+                newTV.rollback(oldValue);
             }
         }
     }
 
     // 用于redo时，不关心oldValue
     public void writeForRedo(DataBuffer writeBuffer, AMTransactionEngine transactionEngine) {
-        if (isForUpdate || undone) {
+        if (undone || isForUpdate)
             return;
-        }
         StorageMap<?, ?> map = transactionEngine.getStorageMap(mapName);
         // 有可能在执行DROP DATABASE时删除了
         if (map == null) {
